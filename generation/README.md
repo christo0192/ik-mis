@@ -145,6 +145,13 @@ non-negotiable** -- this job only issues `SELECT`s; the only write path,
 DRY_RUN or live, is the same guarded `write_rows()` every other job in this
 directory uses.
 
+**This job reads segment grain (`pmis_daily_segment_facts`), not campaign
+grain (`pmis_full_funnel`).** That is a deliberate re-point, not the original
+design -- see "Why segment grain, not campaign grain" below for the full
+investigation. Output rows carry `campaign_name = "segment:<Segment>"` (e.g.
+`"segment:NB"`); there is no real campaign identity at this grain. Real
+per-campaign CPQL is Step 2's (`campaign_registry`) job, once it exists.
+
 ### Usage
 
 ```bash
@@ -167,6 +174,55 @@ python3 generation/lead_quality.py --from-fixture generation/fixtures/lead_quali
 `DRY_RUN` (default `true`, from `config.py`) governs the write side exactly
 as elsewhere in this department. `--from-fixture` only replaces the *read*
 side.
+
+### Why segment grain, not campaign grain (investigated, confirmed by a live
+read -- not a design preference)
+
+`ik-marketing-data.SIP_pattern_rag.pmis_full_funnel`'s per-`(date,
+campaign)` spend<->leads join is **broken upstream, today**. A live query
+over a trailing 30-day window (2026-06-04..2026-07-03) found **0 of 148**
+aggregated campaign rows with both `spend > 0` and `iql > 0` simultaneously
+(42 rows have spend with zero leads; 106 have leads with zero spend).
+Example: `IK-IN_Google_NB_EdgeUp_AgenticAI_35-54` (Ads-collector-sourced,
+spend ~2.4L over the period, 0 leads) vs.
+`IK-IN_Google_NB_EdgeUp_AgenticAI_35-54__23333103542` (BQ-view-sourced, the
+same real campaign, 64 leads, **0 spend**) -- the trailing
+`__<platform_campaign_id>` present on the UTM/BQ side is absent on the raw
+Ads-API side, so `build_dashboard.py`'s `cell()` keys them as two different
+campaigns and spend/leads never merge into one row. Every campaign-grain
+`cpl_inr`/`cpql_inr` this job could derive from `pmis_full_funnel` today
+would be `0.0` or `None` for essentially every real campaign -- not a
+signal, an artifact of the broken join. This is precisely the
+attribution-spine brittleness PLAN.md already flags (Step 7 explicitly
+depends on Step 2's `campaign_registry`, not yet backfilled).
+
+`ik-marketing-data.SIP_pattern_rag.pmis_daily_segment_facts` has no such
+join to break. Verified by reading its schema in
+`/mnt/c/mcp-servers/anomaly-engine/bq_writer.py`'s `SCHEMAS` dict (lines
+94-100): columns `date`, `segment`, `spend`, `iql`, `cpiql`, `wa`, `wa_pct`,
+`dcd`, `junk`, `sends`, `opens`, `open_rate`, `sales`, `revenue` -- no
+`campaign_name` column at all. Confirmed against how the table is actually
+built in `/mnt/c/mcp-servers/anomaly-engine/persist_facts.py`'s
+`aggregate_daily_segments()`: spend and lead counts are summed directly into
+the same `(date, segment)` accumulator from each source (Google, LinkedIn,
+BigQuery lead view, the Swati Sheet), with no campaign-name-keyed merge step
+-- there is nothing here that a campaign-id-suffix mismatch could break.
+This is the reconciliation PMIS itself trusts and reports from (the daily
+Slack digest / dashboard segment tables read this exact table). Segment
+grain is real and trustworthy today; campaign grain is not.
+
+**Trade-off, plainly stated:** this job now produces four rows per period
+(one per `NB`/`Discovery`/`Brand`/`LinkedIn` segment -- the same fixed list
+`build_segment_tables.SEGMENTS` uses), not one row per live campaign.
+`lead_quality_scores.campaign_name` is a required field with no real
+campaign identity at this grain, so this job stamps the literal string
+`"segment:<Segment>"` into it -- an honest placeholder, not a fabricated
+per-campaign number. **Campaign-grain CPQL arrives via `campaign_registry`
+(PLAN.md Phase 0 Step 2) later**: once that table gives the pipeline a
+reliable `platform_campaign_id`-keyed join between ad-spend rows and lead
+rows, this job (or its successor) can re-point at that join and emit real
+per-campaign rows. Until then, no downstream logic should assume
+per-campaign `lead_quality_scores` rows exist.
 
 ### Discovered source tables and columns (verified by reading code, not
 assumed -- see file paths below)
@@ -197,29 +253,36 @@ Traced through `/mnt/c/mcp-servers/anomaly-engine/*.py` and
   revenue = gross x (1 - 18% GST).
 - **`ik-marketing-data.SIP_pattern_rag.pmis_full_funnel`** (written by the
   anomaly-engine's own `build_dashboard.py`, allowlisted in its
-  `bq_writer.py`) -- **this is what `lead_quality.py` actually reads.** One
-  row per `(date, campaign)` already joining Google/LinkedIn Ads spend +
-  `v_campaign_funnel`'s `iql`/`junk_unsuitable` (renamed `junk`) + the Swati
-  Sheet's `sales`/`revenue` (net GST). Columns used here: `date`, `campaign`,
-  `channel`, `platform`, `spend`, `iql`, `junk`.
-- **`ik-marketing-data.SIP_pattern_rag.pmis_daily_segment_facts`** -- an
-  alternative, segment-only (no `campaign_name`) grain of the same
-  aggregation; not used here because `lead_quality_scores.campaign_name` is
-  a required field and this table doesn't carry one.
+  `bq_writer.py`) -- campaign grain, one row per `(date, campaign)`. **Not
+  used by this job** -- its `campaign` join to spend is confirmed broken
+  upstream (see "Why segment grain" above). Columns: `date`, `campaign`,
+  `campaign_id`, `platform`, `channel`, `program`, `spend`, `impressions`,
+  `clicks`, `ctr`, `cpc`, `sends`, `opens`, `open_rate`, `lp_clicks`, `iql`,
+  `cpiql`, `wa`, `cp_wa`, `dcd`, `cp_dcd`, `rte`, `junk`, `sales`, `cvr`,
+  `cac`, `revenue`, `roas`.
+- **`ik-marketing-data.SIP_pattern_rag.pmis_daily_segment_facts`** -- segment
+  grain, one row per `(date, segment)`, `segment` in `NB`/`Discovery`/
+  `Brand`/`LinkedIn`. **This is what `lead_quality.py` actually reads.**
+  Columns (verified against `/mnt/c/mcp-servers/anomaly-engine/bq_writer.py`'s
+  `SCHEMAS["pmis_daily_segment_facts"]`, lines 94-100): `date`, `segment`,
+  `spend`, `iql`, `cpiql`, `wa`, `wa_pct`, `dcd`, `junk`, `sends`, `opens`,
+  `open_rate`, `sales`, `revenue`. This job's `fetch_lead_outcomes()` selects
+  only `date, segment, spend, iql, junk`.
 
-**Why `pmis_full_funnel` and not `India_Leads` directly:** both service-account
-keys available in this environment were live-tested (`ads-anomaly-bq.json`,
-scoped to `India_Leads` per `SETUP_WINDOWS.md`/`SETUP_MACOS.md`, and
-`claude-code-dev-bq.json`, the Generation dept's own default credential) and
-**both got `403 Access Denied` on `Tech_ML_Projects.lead_history`**, a table
+**Why `pmis_daily_segment_facts` and not `India_Leads` directly:** both
+service-account keys available in this environment were live-tested
+(`ads-anomaly-bq.json`, scoped to `India_Leads` per
+`SETUP_WINDOWS.md`/`SETUP_MACOS.md`, and `claude-code-dev-bq.json`, the
+Generation dept's own default credential) and **both got `403 Access
+Denied` on `Tech_ML_Projects.lead_history`**, a table
 `v_campaign_funnel`/`master_view_leads_india` depend on underneath -- neither
 key can query the view or its base table directly in this environment, even
-though `ads-anomaly-bq@` nominally has `dataViewer` on `India_Leads`. A live
-`SELECT` against `pmis_full_funnel` with `claude-code-dev-bq.json` **did**
-succeed (3,760 rows, 219 distinct campaigns, 2026-05-11..2026-07-03 at probe
-time) -- it carries the same India_Leads-derived numbers, already joined, and
-is reachable with credentials this job actually has. Read-only either way;
-this is a credentials/reachability finding, not a design preference.
+though `ads-anomaly-bq@` nominally has `dataViewer` on `India_Leads`. Both
+`pmis_full_funnel` and `pmis_daily_segment_facts` are reachable with
+`claude-code-dev-bq.json` (the same credential this job's read path defaults
+to) -- the choice between the two `pmis_*` tables is purely about which
+grain has a working spend<->leads join (see "Why segment grain" above), not
+about reachability.
 
 ### Credentials (read path)
 
@@ -236,84 +299,83 @@ Verified present on disk at probe time:
 
 ### Segment mapping
 
-Reuses `collect_kw_perf.classify_google_campaign()` verbatim (imported, not
-duplicated) for Google campaign names (`Brand`/`Discovery`/`_nb_` substring
-rules, `"Other"` fallback). One addition beyond `collect_kw_perf.py`: this
-job also sees LinkedIn rows (via `pmis_full_funnel`), which a classifier
-named for Google campaign names cannot classify by name -- `_segment_for()`
-routes on `channel`/`platform == "LinkedIn"` first (mirroring how
-`build_segment_tables.py` itself keys LinkedIn off channel, not a name
-substring), then falls through to the Google classifier. PLAN.md Phase 0
-Step 2 (`campaign_registry`) is the permanent replacement.
+None needed for the live path: `pmis_daily_segment_facts` already carries a
+`segment` column (`NB`/`Discovery`/`Brand`/`LinkedIn`, the same
+`build_segment_tables.SEGMENTS` list the anomaly-engine itself iterates) --
+`aggregate_and_derive()` groups directly on it. This is a simplification
+from the job's original campaign-grain design, which reused
+`collect_kw_perf.classify_google_campaign()` plus a LinkedIn channel/platform
+shortcut to derive a segment from a campaign name; that classifier is no
+longer needed here (the source table already carries the segment), though
+`lead_quality.py` still imports `collect_kw_perf` for its shared
+`_sanitize_error()` helper (see "Sanitized error logging" below).
 
 ### Derivation
 
-Per `(campaign_name, segment)`, summed over the period: `leads` = sum of
-`iql`; `junk_leads` = sum of `junk` (clamped to `<= leads`); `quality_leads`
-= `leads - junk_leads` (i.e. **not** Junk/Unsuitable -- see "VERIFY WITH DATA
-TEAM" below for what this does and doesn't mean); `quality_ratio` =
+Per `segment`, summed over the period: `leads` = sum of `iql`; `junk_leads`
+= sum of `junk` (clamped to `<= leads`); `quality_leads` = `leads -
+junk_leads` (i.e. **not** Junk/Unsuitable -- see "VERIFY WITH DATA TEAM"
+below for what this does and doesn't mean); `quality_ratio` =
 `quality_leads / leads` (`None` if `leads == 0`); `cpl_inr` = `spend_inr /
 leads` (`None` if `leads == 0`); `cpql_inr` = `spend_inr / quality_leads`
-(`None` if `quality_leads == 0` -- **null, never `inf`/an error**).
+(`None` if `quality_leads == 0` -- **null, never `inf`/an error**). A raw
+row with a missing/empty `segment` is dropped and counted (not silently
+merged into a phantom group); the count is logged at `DEBUG` level.
+
+### Sanitized error logging
+
+`lead_quality.py` routes every exception message it logs on the live-read
+and write paths through `collect_kw_perf._sanitize_error()` (the same
+credential-fragment redaction `collect_kw_perf.py` itself uses for its own
+Google Ads API errors) before logging it -- a BigQuery client or
+`google-auth` exception can otherwise echo a bearer token or key fragment
+into the log line it raises from.
 
 ### VERIFY WITH DATA TEAM -- semantic assumptions this job makes
 
 1. **"Quality" = not Junk/Unsuitable, not "became a Sale."** `quality_leads`
    is defined as `leads - junk_leads` (same-period, same-cohort, immediately
-   available from `v_campaign_funnel`/`pmis_full_funnel`). It is **not**
-   `sales` (from the Swati Sheet) -- period-level sale *counts* would mix
-   cohorts (sales close weeks/months after the lead that produced them was
-   captured, so "sales in June" and "leads in June" are largely different
-   people), and `schemas.LeadQualityScoreRow` has no revenue field to carry
-   a separate Sale-based signal anyway. If the org wants CPQL defined on
-   verified paying customers rather than non-junk leads, that needs either a
-   cohort-level (lead-capture-date-to-eventual-sale) join, out of scope for
-   this read-only pull-forward, or an explicit sign-off that a lagging,
-   cross-cohort `sales`-count proxy is acceptable at this campaign x period
-   grain.
+   available from `v_campaign_funnel`/`pmis_daily_segment_facts`). It is
+   **not** `sales` (from the Swati Sheet) -- period-level sale *counts*
+   would mix cohorts (sales close weeks/months after the lead that produced
+   them was captured, so "sales in June" and "leads in June" are largely
+   different people), and `schemas.LeadQualityScoreRow` has no revenue field
+   to carry a separate Sale-based signal anyway. If the org wants CPQL
+   defined on verified paying customers rather than non-junk leads, that
+   needs either a cohort-level (lead-capture-date-to-eventual-sale) join,
+   out of scope for this read-only pull-forward, or an explicit sign-off
+   that a lagging, cross-cohort `sales`-count proxy is acceptable at this
+   segment x period grain.
 2. **The exact set of "junk" disposition labels is not independently
    verified.** `v_campaign_funnel`'s DDL hardcodes `lead_status IN ('Junk',
-   'Unsuitable')`; this job trusts that definition (via `pmis_full_funnel`'s
-   `junk` column) rather than re-deriving it, because **neither available
-   service-account key could query `master_view_leads_india`'s `lead_status`
-   column directly** (see "Discovered source tables" above -- both hit `403`
-   on `Tech_ML_Projects.lead_history`). Confirm with the data team whether
+   'Unsuitable')`; this job trusts that definition (via
+   `pmis_daily_segment_facts`'s `junk` column, itself summed from
+   `v_campaign_funnel.junk_unsuitable` in `persist_facts.py`) rather than
+   re-deriving it, because **neither available service-account key could
+   query `master_view_leads_india`'s `lead_status` column directly** (see
+   "Discovered source tables" above -- both hit `403` on
+   `Tech_ML_Projects.lead_history`). Confirm with the data team whether
    `Junk`/`Unsuitable` are the only disposition values that should be
    excluded from "quality" (e.g., is there a `Duplicate` or `Invalid Number`
    status not covered here?).
-3. **Segment mapping is the same interim substring classifier as
-   `collect_kw_perf.py`**, plus a LinkedIn channel/platform shortcut (see
-   above) -- both are stopgaps for `campaign_registry` (Step 2, not yet
-   backfilled per `PLAN.md`'s status log). Any campaign name that doesn't
-   contain `brand`/`discovery`/`_nb_` and isn't tagged LinkedIn lands in
-   `"Other"`.
-4. **CRITICAL -- confirmed via a live read, not a guess: `pmis_full_funnel`'s
-   `campaign` join between ad-spend rows and lead rows is broken for (at
-   least) the current data.** A live query over the trailing 30 days
-   (2026-06-04..2026-07-03) found **0 of 148** aggregated campaign rows with
-   both `spend > 0` and `iql > 0` simultaneously (42 rows have spend with
-   zero leads; 106 have leads with zero spend). Example:
-   `IK-IN_Google_NB_EdgeUp_AgenticAI_35-54` (Ads-collector-sourced, spend
-   ~2.4L over the period, 0 leads) vs.
-   `IK-IN_Google_NB_EdgeUp_AgenticAI_35-54__23333103542` (BQ-view-sourced,
-   the same real campaign, 64 leads, **0 spend**) -- the trailing
-   `__<platform_campaign_id>` present on the UTM/BQ side is absent on the raw
-   Ads-API side, so `build_dashboard.py`'s `cell()` keys them as two
-   different campaigns and spend/leads never merge into one row. This is
-   precisely the attribution-spine brittleness `PLAN.md` already flags
-   (Step 7 explicitly depends on Step 2's `campaign_registry`, not yet
-   backfilled) -- **`cpl_inr`/`cpql_inr` from the live path will be `0.0` or
-   `None` for essentially every real campaign until that join is fixed
-   upstream (in `pmis_full_funnel`/`build_dashboard.py`) or `lead_quality.py`
-   is re-pointed at `campaign_registry`-resolved identifiers.** The
-   aggregation/derivation logic itself is verified correct (see
-   `tests_lead_quality.py`, which exercises the case where spend and leads
-   *do* share one row, as they will once the join is fixed) -- this is a
-   live-data/upstream-join gap, not a bug in this job.
-5. **`pmis_daily_segment_facts`/`pmis_full_funnel` are the anomaly-engine's
+3. **Campaign-grain CPQL is not available from this job today, by design.**
+   `pmis_full_funnel`'s `campaign` join between ad-spend rows and lead rows
+   is confirmed broken (0 of 148 campaign rows had both spend and leads over
+   a live trailing-30-day probe -- see "Why segment grain" above), so this
+   job intentionally reads `pmis_daily_segment_facts` instead and emits
+   segment-level rows only, with `campaign_name = "segment:<Segment>"` as an
+   explicit placeholder. **Campaign-grain `lead_quality_scores` rows will
+   only become available once `campaign_registry` (PLAN.md Phase 0 Step 2)
+   exists and this job (or its successor) is re-pointed at a
+   `platform_campaign_id`-keyed join** -- until then, do not build downstream
+   logic (dashboards, the keyword/copy brains' digests, etc.) that assumes
+   per-campaign `lead_quality_scores` rows exist.
+4. **`pmis_daily_segment_facts`/`pmis_full_funnel` are the anomaly-engine's
    own tables, outside this department's write allowlist.** This job only
-   reads them (`GENERATION_PMIS_SOURCE_DATASET`/`GENERATION_PMIS_FULL_FUNNEL_
-   TABLE` env vars, both defaulting to the real names) -- confirm with the
-   data team that Generation reading (never writing) another department's
+   reads them (`GENERATION_PMIS_SOURCE_DATASET`/
+   `GENERATION_PMIS_SEGMENT_FACTS_TABLE` env vars, both defaulting to the
+   real names, validated as bare `[A-Za-z0-9_]+` identifiers before being
+   interpolated into the SELECT's table reference) -- confirm with the data
+   team that Generation reading (never writing) another department's
    `pmis_*` tables is an acceptable interim dependency, pending the
    dedicated `Creative_Engine` dataset and/or `campaign_registry`.

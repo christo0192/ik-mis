@@ -130,6 +130,7 @@ Connect three "departments" — **Intelligence** (existing market-research pipel
   - Done when: the perf team uploads one export cleanly to Google Ads Editor, and the waste baseline (₹) is in `value_ledger`.
 
 - [ ] **Step 12: Universal dashboard — "Mission Control" (the review anchor)** [Complex]
+  - **Design spec: `docs/dashboard-vision.md` (PM vision, 2026-07-04)** — restructure the existing market-research dashboard (it becomes one section, not the whole app); homepage = live force-directed system graph (Obsidian-style, functional: nodes = pipelines/tables, state = health, click = navigate) + vital-signs tiles; one page per pipeline; universal click-through drill-down (segment → campaign → asset), URL-addressable.
   - Depends on: Step 7, Step 10
   - Risk: Medium — extends the existing Next.js shell (`market_research_dashboard/`) but adds its first *write* path (approve/reject status → BigQuery through the guarded writer); verified no approval infrastructure exists anywhere today.
   - [ ] Add `Creative_Engine` queries to `src/lib/queries.ts` + new pages: **Review queue** (latest-`run_date` keywords with relevance verdict + grounding, copy drafts, angles; approve/reject controls persisting `status`), **Rejects/negatives** tab (+ export download), **Run health** (`generation_runs`), **Value tiles** (waste eliminated ₹, CPQL trend, quality-lead volume, acceptance rate).

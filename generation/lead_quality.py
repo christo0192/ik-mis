@@ -12,49 +12,81 @@ for the full writeup (source tables, columns, and the semantic assumptions
 that need data-team sign-off).
 
 ------------------------------------------------------------------------
-DISCOVERY (how lead outcomes are actually labeled -- verified by reading
-/mnt/c/mcp-servers/anomaly-engine/*.py and /mnt/c/mcp-servers/google-sheets/,
-and by a live BigQuery read against both candidate sources; see README.md):
+WHY THIS JOB READS SEGMENT GRAIN, NOT CAMPAIGN GRAIN (investigated and
+confirmed by a live BigQuery read, not a guess -- see README.md for the
+fuller writeup):
+
+`pmis_full_funnel`'s per-(date, campaign) spend<->leads join is broken
+upstream, today. A live query over a trailing 30-day window found 0 of 148
+aggregated campaign rows with both spend > 0 and iql > 0 simultaneously (42
+rows carried spend with zero leads; 106 carried leads with zero spend).
+Root cause: ad-spend rows are keyed by the raw Ads-API campaign name, lead
+rows by the BQ-view campaign name with a trailing `__<platform_campaign_id>`
+suffix, so `build_dashboard.py`'s `cell()` keys them as two different
+campaigns for the same real campaign and spend/leads never land in one row.
+Every campaign-grain `cpl_inr`/`cpql_inr` this job could derive from
+`pmis_full_funnel` today would be `0.0` or `None` for essentially every real
+campaign -- not a signal, an artifact of a broken join. This is exactly the
+attribution-spine brittleness PLAN.md already flags (Step 7 depends on Step
+2's `campaign_registry`, not yet backfilled at the time of this fix).
+
+`ik-marketing-data.SIP_pattern_rag.pmis_daily_segment_facts` (columns:
+`date`, `segment`, `spend`, `iql`, `cpiql`, `wa`, `wa_pct`, `dcd`, `junk`,
+`sends`, `opens`, `open_rate`, `sales`, `revenue` -- verified by reading
+`/mnt/c/mcp-servers/anomaly-engine/bq_writer.py`'s `SCHEMAS` dict, lines
+94-100, and confirmed against how the table is actually built in
+`/mnt/c/mcp-servers/anomaly-engine/persist_facts.py`'s
+`aggregate_daily_segments()`) has no such join to break: spend and lead
+counts are summed directly into the same `(date, segment)` accumulator from
+each source, per day, with no campaign-name-keyed merge step at all. This is
+the reconciliation PMIS itself trusts and reports from (the daily Slack
+digest / dashboard segment tables read this exact table). Segment grain is
+real and trustworthy today; campaign grain is not.
+
+Because of this, this job now reads `pmis_daily_segment_facts` and derives
+CPQL per **segment**, not per campaign. Output rows carry `campaign_name` =
+the literal string `"segment:<Segment>"` (e.g. `"segment:NB"`) -- there is
+no campaign identity at this grain, but `schemas.LeadQualityScoreRow`
+requires a non-null `campaign_name`, so this is an honest placeholder that
+says exactly what it is, rather than a fabricated per-campaign number.
+**True campaign-grain CPQL is Step 2's job:** once `campaign_registry` gives
+this pipeline a reliable `platform_campaign_id`-keyed join between ad-spend
+rows and lead rows, this job (or its successor) can re-point at that join and
+emit real per-campaign rows. Until then, do not expect (or build downstream
+logic that depends on) per-campaign `lead_quality_scores` rows from this
+job -- segment-level rows are the trustworthy output.
+
+(Historical background on how lead outcomes are labeled in the first place
+-- unaffected by the grain change above, kept for provenance; see README.md
+for the full discovery writeup with file paths:)
 
   * Base truth lives in `ik-marketing-data.India_Leads.master_view_leads_india`
-    (per-lead grain). A BQ view, `ik-marketing-data.India_Leads.v_campaign_funnel`
-    (defined in /mnt/c/mcp-servers/google-sheets/v_campaign_funnel.sql),
-    pre-aggregates it to (date, campaign_name=UTM_Campaign, channel,
-    utm_source) with: iql = COUNT(*) [total leads], wa, dcd, rte,
-    junk_unsuitable = COUNTIF(lead_status IN ('Junk','Unsuitable')),
-    sales = COUNTIF(sale_date IS NOT NULL), revenue = SUM(net_revenue).
-    Both keys tested for this job (ads-anomaly-bq@ and claude-code-dev-bq@)
-    got `403 Access Denied` on the view's underlying `Tech_ML_Projects.
-    lead_history` table -- direct India_Leads reads are NOT reachable with
-    the credentials available in this environment (see README "VERIFY WITH
-    DATA TEAM").
-
-  * The anomaly-engine's own ETL (build_dashboard.py) already re-joins
-    v_campaign_funnel against Google/LinkedIn Ads spend AND the Swati Sheet
-    (Google Sheet id in /mnt/c/mcp-servers/google-sheets/.env,
-    GOOGLE_SHEETS_SHEET_ID, tab "swati sheet"; sales/revenue columns =
-    "Deal amount in INR" x (1 - 18% GST), joined to a campaign via the
-    sheet's "Course/Campaign (From UTM)" trailing campaign-id) and writes
-    the result to `ik-marketing-data.SIP_pattern_rag.pmis_full_funnel`, one
-    row per (date, campaign). That table IS reachable with the
-    `claude-code-dev-bq@` key (confirmed via a live SELECT -- 3,760 rows,
-    219 distinct campaigns, 2026-05-11..2026-07-03 at probe time) and is
-    exactly the join this job needs already assembled: campaign, channel,
-    platform, spend, iql, junk, sales, revenue per (date, campaign). This
-    job reads `pmis_full_funnel` rather than India_Leads directly --
-    same underlying India_Leads-derived numbers, reachable credentials,
-    read-only either way.
-
+    (per-lead grain), pre-aggregated by the view
+    `ik-marketing-data.India_Leads.v_campaign_funnel` to
+    `(date, campaign_name=UTM_Campaign, channel, utm_source)` with `iql`
+    (total leads) and `junk_unsuitable = COUNTIF(lead_status IN ('Junk',
+    'Unsuitable'))` among other columns. Neither service-account key
+    available in this environment can read that view or its base table
+    directly (`403 Access Denied` on `Tech_ML_Projects.lead_history`) --
+    direct India_Leads reads are NOT reachable with the credentials
+    available here.
+  * The anomaly-engine's own ETL joins `v_campaign_funnel` against
+    Google/LinkedIn Ads spend AND the Swati Sheet (the revenue/sale source
+    of truth, not ad-platform conversions) and writes the result to both
+    `pmis_full_funnel` (campaign grain, broken join -- see above) and
+    `pmis_daily_segment_facts` (segment grain, reachable and trustworthy --
+    what this job reads).
   * "Quality" here = NOT Junk/Unsuitable (leads - junk), not "became a Sale"
     -- see README "VERIFY WITH DATA TEAM" for why, and what a Sale-based
     definition would require.
 ------------------------------------------------------------------------
 
-Live path: SELECT (date, campaign, channel, platform, spend, iql, junk) from
-`pmis_full_funnel` for the period, group by campaign (deriving `segment` via
-_segment_for -- see below), then derive quality_ratio / cpl_inr / cpql_inr
-with division-by-zero guards. Write via bq_writer.write_rows("lead_quality_
-scores", rows) (DRY_RUN default true, per config.py).
+Live path: SELECT (date, segment, spend, iql, junk) from
+`pmis_daily_segment_facts` for the period, group by segment (segment is
+already a column at this grain -- no campaign-name classification needed),
+then derive quality_ratio / cpl_inr / cpql_inr with division-by-zero guards.
+Write via bq_writer.write_rows("lead_quality_scores", rows) (DRY_RUN default
+true, per config.py).
 
 This module's read path is entirely separate from bq_writer.py: it builds
 its own read-only `google.cloud.bigquery.Client` (lazy import, only needed
@@ -77,14 +109,15 @@ import glob
 import json
 import logging
 import os
+import re
 import sys
 from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
 import bq_writer
+import collect_kw_perf
 import config
-from collect_kw_perf import classify_google_campaign
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -93,30 +126,31 @@ log = logging.getLogger("lead_quality")
 
 # ---------------------------------------------------------------------------
 # Source table (read-only). Independent of config.TARGET_DATASET/TABLE_PREFIX
-# on purpose: pmis_full_funnel is the anomaly-engine's own table, physically
-# always in SIP_pattern_rag, regardless of which dataset Generation's own
-# writes are currently pointed at (config.GENERATION_DATASET_MODE).
+# on purpose: pmis_daily_segment_facts is the anomaly-engine's own table,
+# physically always in SIP_pattern_rag, regardless of which dataset
+# Generation's own writes are currently pointed at
+# (config.GENERATION_DATASET_MODE).
 # ---------------------------------------------------------------------------
 PMIS_SOURCE_DATASET = os.environ.get("GENERATION_PMIS_SOURCE_DATASET", "SIP_pattern_rag")
-PMIS_FULL_FUNNEL_TABLE = os.environ.get("GENERATION_PMIS_FULL_FUNNEL_TABLE", "pmis_full_funnel")
+PMIS_SEGMENT_FACTS_TABLE = os.environ.get(
+    "GENERATION_PMIS_SEGMENT_FACTS_TABLE", "pmis_daily_segment_facts")
+
+# Both names above are interpolated directly into an f-string SQL identifier
+# position (backtick-quoted table reference) rather than passed as a bound
+# query parameter -- BigQuery's parameterized-query API has no placeholder
+# for identifiers (table/dataset/column names), only for values. Validate
+# them as bare [A-Za-z0-9_]+ identifiers before every query build, so an
+# env-var typo or a hostile override can raise a clear error here instead of
+# reaching BigQuery as unvalidated identifier text.
+_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9_]+")
 
 
-# ---------------------------------------------------------------------------
-# Segment classification -- reuses collect_kw_perf.py's interim Google-name
-# substring classifier verbatim (imported, not duplicated), per PLAN.md's
-# instruction for this job. One addition this job needs that collect_kw_perf
-# never did: this job also sees LinkedIn rows (via pmis_full_funnel), which a
-# classifier named `classify_google_campaign` cannot and should not try to
-# classify by name. Mirrors build_segment_tables.py's own convention of
-# keying LinkedIn off channel/platform rather than a name substring. Falls
-# through to the Google-name classifier, then "Other" -- the same terminal
-# fallback collect_kw_perf.py's _segment_for() uses. PLAN.md Phase 0 Step 2
-# (campaign_registry) is the permanent replacement for all of this.
-# ---------------------------------------------------------------------------
-def _segment_for(campaign_name, channel=None, platform=None):
-    if (channel or "").strip().lower() == "linkedin" or (platform or "").strip().lower() == "linkedin":
-        return "LinkedIn"
-    return classify_google_campaign(campaign_name) or "Other"
+def _validate_bq_identifier(value: str, env_var_name: str) -> str:
+    if not value or not _IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(
+            f"{env_var_name} must be a bare [A-Za-z0-9_]+ identifier for use "
+            f"in a SQL table reference (got {value!r})")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -136,10 +170,10 @@ def _resolve_read_credentials_path() -> Path:
     same key config.py's writer would use for live writes
     (config.BQ_SERVICE_ACCOUNT) -- the anomaly-engine's own
     `claude-code-dev-bq@` key already has read+write on `SIP_pattern_rag`
-    (it is the account that writes pmis_full_funnel), so no new credential
-    is required for this read-only job. `GENERATION_BQ_READ_SERVICE_ACCOUNT`
-    overrides independently, in case a narrower read-only key is issued
-    later.
+    (it is the account that writes pmis_daily_segment_facts), so no new
+    credential is required for this read-only job.
+    `GENERATION_BQ_READ_SERVICE_ACCOUNT` overrides independently, in case a
+    narrower read-only key is issued later.
 
     WSL fallback: under WSL, Path.home() resolves to the Linux home (no
     `.gcp-keys` there in this environment) while the real key lives under
@@ -177,17 +211,19 @@ def get_read_client():
 
 
 def fetch_lead_outcomes(period_start: date, period_end: date) -> list[dict]:
-    """Live SELECT against pmis_full_funnel for [period_start, period_end].
+    """Live SELECT against pmis_daily_segment_facts for [period_start, period_end].
 
-    Returns raw per-(date, campaign) rows (the same shape
+    Returns raw per-(date, segment) rows (the same shape
     fixtures/lead_quality_sample.json uses) -- aggregation across dates and
     derivation of quality_ratio/cpl/cpql happen in aggregate_and_derive(),
     shared with the --from-fixture path. SELECT only; never writes."""
     from google.cloud import bigquery          # lazy: only needed for live reads
+    dataset = _validate_bq_identifier(PMIS_SOURCE_DATASET, "GENERATION_PMIS_SOURCE_DATASET")
+    table = _validate_bq_identifier(PMIS_SEGMENT_FACTS_TABLE, "GENERATION_PMIS_SEGMENT_FACTS_TABLE")
     client = get_read_client()
     query = f"""
-        SELECT date, campaign, channel, platform, spend, iql, junk
-        FROM `{config.BQ_PROJECT}.{PMIS_SOURCE_DATASET}.{PMIS_FULL_FUNNEL_TABLE}`
+        SELECT date, segment, spend, iql, junk
+        FROM `{config.BQ_PROJECT}.{dataset}.{table}`
         WHERE date BETWEEN @period_start AND @period_end
     """
     job_config = bigquery.QueryJobConfig(query_parameters=[
@@ -198,9 +234,7 @@ def fetch_lead_outcomes(period_start: date, period_end: date) -> list[dict]:
     for r in client.query(query, job_config=job_config).result(timeout=120):
         rows.append({
             "date": str(r["date"]) if r["date"] else None,
-            "campaign": r.get("campaign") or "",
-            "channel": r.get("channel"),
-            "platform": r.get("platform"),
+            "segment": r.get("segment") or "",
             "spend": float(r.get("spend") or 0),
             "iql": int(r.get("iql") or 0),
             "junk": int(r.get("junk") or 0),
@@ -225,28 +259,36 @@ def load_fixture(path) -> list[dict]:
 # ---------------------------------------------------------------------------
 def aggregate_and_derive(raw_rows: list[dict], period_start: date, period_end: date,
                           run_date: date) -> list[dict]:
-    """Group raw per-(date, campaign) rows into per-(campaign, segment) sums
-    over the period, then derive quality_ratio/cpl_inr/cpql_inr with
+    """Group raw per-(date, segment) rows into per-segment sums over the
+    period, then derive quality_ratio/cpl_inr/cpql_inr with
     division-by-zero guards (cpql_inr is null, not inf, when quality_leads
-    is 0). Output rows conform to schemas.LeadQualityScoreRow field-for-field.
+    is 0). Output rows conform to schemas.LeadQualityScoreRow field-for-field,
+    with campaign_name set to the literal string "segment:<Segment>" -- see
+    the module docstring for why there is no real campaign identity at this
+    grain today.
     """
     grouped = defaultdict(lambda: {"leads": 0, "junk_leads": 0, "spend_inr": 0.0})
+    skipped_missing_segment = 0
     for r in raw_rows:
-        campaign = r.get("campaign") or r.get("campaign_name")
-        if not campaign:
+        segment = r.get("segment")
+        if not segment:
+            skipped_missing_segment += 1
             continue
-        segment = _segment_for(campaign, r.get("channel"), r.get("platform"))
-        g = grouped[(campaign, segment)]
+        g = grouped[segment]
         g["leads"] += int(r.get("iql") or 0)
         g["junk_leads"] += int(r.get("junk") or 0)
         g["spend_inr"] += float(r.get("spend") or 0)
 
+    if skipped_missing_segment:
+        log.debug("aggregate_and_derive: skipped %d raw row(s) with missing/empty segment",
+                  skipped_missing_segment)
+
     rows = []
-    for (campaign, segment), g in grouped.items():
+    for segment, g in grouped.items():
         leads = g["leads"]
-        # Defensive clamp: junk_unsuitable is a COUNTIF subset of iql at the
-        # source view's grain, so junk_leads should never exceed leads, but
-        # a clamp keeps quality_ratio in [0, 1] (the schema's own guarantee)
+        # Defensive clamp: junk is a COUNTIF subset of iql at the source
+        # table's grain, so junk_leads should never exceed leads, but a
+        # clamp keeps quality_ratio in [0, 1] (the schema's own guarantee)
         # even if a future source violates that invariant.
         junk_leads = min(g["junk_leads"], leads) if leads else g["junk_leads"]
         quality_leads = max(leads - junk_leads, 0)
@@ -258,7 +300,7 @@ def aggregate_and_derive(raw_rows: list[dict], period_start: date, period_end: d
             "period_start": str(period_start),
             "period_end": str(period_end),
             "run_date": str(run_date),
-            "campaign_name": campaign,
+            "campaign_name": f"segment:{segment}",
             "segment": segment,
             "leads": leads,
             "quality_leads": quality_leads,
@@ -285,9 +327,10 @@ def parse_args(argv=None):
                     help="Run date YYYY-MM-DD (default: today IST via "
                          "bq_writer.run_date_today_ist()).")
     p.add_argument("--from-fixture", type=str, default=None,
-                    help="Path to a JSON fixture of RAW pmis_full_funnel-shaped "
-                         "rows -- skips the BigQuery read entirely (for testing "
-                         "without credentials/the google-cloud-bigquery package).")
+                    help="Path to a JSON fixture of RAW pmis_daily_segment_facts-"
+                         "shaped rows -- skips the BigQuery read entirely (for "
+                         "testing without credentials/the google-cloud-bigquery "
+                         "package).")
     return p.parse_args(argv)
 
 
@@ -317,17 +360,18 @@ def main(argv=None) -> int:
     else:
         log.info("Pulling lead-quality outcomes for %s..%s from %s.%s.%s",
                  period_start, period_end, config.BQ_PROJECT, PMIS_SOURCE_DATASET,
-                 PMIS_FULL_FUNNEL_TABLE)
+                 PMIS_SEGMENT_FACTS_TABLE)
         try:
             raw_rows = fetch_lead_outcomes(period_start, period_end)
         except FileNotFoundError as e:
-            log.error("BigQuery read credentials not found: %s", e)
+            log.error("BigQuery read credentials not found: %s", collect_kw_perf._sanitize_error(str(e)))
             return 1
         except ImportError as e:
-            log.error("google-cloud-bigquery not importable: %s", e)
+            log.error("google-cloud-bigquery not importable: %s", collect_kw_perf._sanitize_error(str(e)))
             return 1
         except Exception as e:
-            log.error("Live read of %s failed: %s", PMIS_FULL_FUNNEL_TABLE, e)
+            log.error("Live read of %s failed: %s", PMIS_SEGMENT_FACTS_TABLE,
+                      collect_kw_perf._sanitize_error(str(e)))
             return 1
         log.info("Pulled %d raw row(s)", len(raw_rows))
 
@@ -336,12 +380,12 @@ def main(argv=None) -> int:
         return 0
 
     rows = aggregate_and_derive(raw_rows, period_start, period_end, run_date)
-    log.info("Aggregated to %d campaign x segment row(s)", len(rows))
+    log.info("Aggregated to %d segment row(s)", len(rows))
 
     try:
         written = bq_writer.write_rows("lead_quality_scores", rows)
     except Exception as e:
-        log.error("Write to lead_quality_scores failed: %s", e)
+        log.error("Write to lead_quality_scores failed: %s", collect_kw_perf._sanitize_error(str(e)))
         return 1
 
     if config.DRY_RUN:

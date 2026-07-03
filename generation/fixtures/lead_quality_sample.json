@@ -1,74 +1,65 @@
 [
   {
     "date": "2026-06-05",
-    "campaign": "IK-IN_Google_NB_EdgeUp_AgenticAI_25-34__111111111",
-    "channel": "Google NB",
-    "platform": "Google",
+    "segment": "NB",
     "spend": 15000.0,
     "iql": 5,
     "junk": 1
   },
   {
     "date": "2026-06-12",
-    "campaign": "IK-IN_Google_NB_EdgeUp_AgenticAI_25-34__111111111",
-    "channel": "Google NB",
-    "platform": "Google",
+    "segment": "NB",
     "spend": 16000.0,
     "iql": 6,
     "junk": 0
   },
   {
     "date": "2026-06-05",
-    "campaign": "IK-IN_Google_Discovery_EdgeUp_Domain_Sales_LAL__222222222",
-    "channel": "Google Discovery",
-    "platform": "Google",
+    "segment": "Discovery",
     "spend": 8000.0,
     "iql": 4,
     "junk": 4
   },
   {
     "date": "2026-06-12",
-    "campaign": "IK-IN_Google_Discovery_EdgeUp_Domain_Sales_LAL__222222222",
-    "channel": "Google Discovery",
-    "platform": "Google",
+    "segment": "Discovery",
     "spend": 8500.0,
     "iql": 3,
     "junk": 3
   },
   {
     "date": "2026-06-05",
-    "campaign": "IK-IN_Brand__333333333",
-    "channel": "Google Brand",
-    "platform": "Google",
+    "segment": "Brand",
     "spend": 2000.0,
     "iql": 2,
     "junk": 0
   },
   {
     "date": "2026-06-05",
-    "campaign": "IK-IN_LinkedIn_EdgeUp_Conversation_EM_JF__444444444",
-    "channel": "LinkedIn",
-    "platform": "LinkedIn",
+    "segment": "LinkedIn",
     "spend": 12000.0,
     "iql": 6,
     "junk": 1
   },
   {
     "date": "2026-06-12",
-    "campaign": "IK-IN_LinkedIn_EdgeUp_Conversation_EM_JF__444444444",
-    "channel": "LinkedIn",
-    "platform": "LinkedIn",
+    "segment": "LinkedIn",
     "spend": 13000.0,
     "iql": 5,
     "junk": 0
   },
   {
     "date": "2026-06-05",
-    "campaign": "IK-IN_Google_NB_EdgeUp_Test_ZeroLeads__555555555",
-    "channel": "Google NB",
-    "platform": "Google",
+    "segment": "ZeroLeadTest",
     "spend": 500.0,
     "iql": 0,
+    "junk": 0
+  },
+  {
+    "date": "2026-06-06",
+    "segment": "",
+    "spend": 999.0,
+    "iql": 3,
     "junk": 0
   }
 ]
