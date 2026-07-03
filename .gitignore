@@ -1,0 +1,14 @@
+# Virtual environments
+.venv/
+.venv-*/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Generated DRY_RUN previews and staging artifacts (regenerable)
+generation/staging/*.json
+
+# Local env files
+.env
+*.local

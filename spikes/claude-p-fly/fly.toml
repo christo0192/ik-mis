@@ -1,0 +1,27 @@
+# Fly.io config -- claude -p deployment de-risk spike (PLAN.md Phase 0 / Step 4).
+# Pattern mirrored from the proven /mnt/c/mcp-servers/anomaly-engine/fly.toml
+# (scheduled batch, not a web service -- runs one thing to completion, exits).
+#
+# Deploy FROM THIS DIRECTORY:
+#   fly launch --no-deploy --copy-config --name ik-claude-spike   (first time only, if app doesn't exist)
+#   fly deploy .
+#
+# Run once on demand (no cron/scheduler for the spike -- manual `fly machine run`):
+#   fly machine run . --app ik-claude-spike
+#
+# No [http_service] -- this is a one-shot smoke test, not a web service.
+# Runs entrypoint.sh -> spike_test.py -> exits; Fly stops the machine
+# (billed only for the seconds it runs).
+
+app = 'ik-claude-spike'
+primary_region = 'sin'   # same region choice as anomaly-engine (bom had no capacity 2026-06-05)
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'   # no Chromium/heavy deps here -- just Node CLI + a stdlib script
+
+[[restart]]
+  policy = "never"    # spike must not auto-restart; each run is a deliberate, observed test
+
+[deploy]
+  strategy = "immediate"

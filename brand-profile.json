@@ -1,0 +1,156 @@
+{
+  "brand": "Interview Kickstart",
+  "website": "https://interviewkickstart.com",
+  "extracted_at": "2026-07-03",
+  "extraction_method": "manual (ads-dna skill invoked but its fixed output schema did not match the Phase 0 Step 5 schema required by PLAN.md; extraction process followed the skill's methodology — homepage + subpages via WebFetch, plus raw-HTML curl+grep for colors/fonts since WebFetch strips CSS — but output was written to this custom schema instead)",
+  "sources_checked": [
+    "https://interviewkickstart.com",
+    "https://interviewkickstart.com/courses",
+    "https://interviewkickstart.com/reviews",
+    "https://interviewkickstart.com/about-us",
+    "https://interviewkickstart.com/in",
+    "https://interviewkickstart.com/guide/interview-kickstart-cost"
+  ],
+  "market_context": {
+    "region": "India (global site also serves US/other markets; /in is the India-localized page with INR stats)",
+    "currency": "INR (India-specific page /in quotes ₹; global site quotes $)",
+    "audience": "Experienced tech professionals (SWE, ML/DS, EM, TPM, PM, security/SRE/cloud engineers) in India seeking interview prep and AI/ML upskilling to land roles at FAANG/MAANG+ and Tier-1 tech companies globally or in India-based offices of those companies. Grounded in /in page stats (₹70 LPA avg salary, ₹24 LPA avg hike, ₹1.7Cr highest offer, PwC India x IK Agentic AI Career Accelerator) and homepage/course catalog role breadth."
+  },
+  "visual_identity": {
+    "primary_colors": ["#005EFF", "#009BEC"],
+    "secondary_colors": ["#2CB7FF", "#49A9F8", "#00A2FF", "#D0EBFF", "#E2F3FF", "#B3DEFF"],
+    "neutral_colors": ["#FFFFFF", "#F9FAFB", "#475467", "#1f2124", "#3f444b"],
+    "color_source_note": "WebFetch strips CSS, so colors were pulled from the raw homepage HTML (curl) — the two primary blues (#005EFF, #009BEC) come from fill attributes inside the embedded Interview Kickstart logo SVG at https://interviewkickstart.com/wp-content/uploads/2025/05/620b3b133ad9178175a0f3bb_interviewkickstart-logo-1.svg; the light-blue secondaries and neutrals come from inline CSS on the homepage (background/text colors). No official brand style-guide document was found on the site, so this is a reverse-engineered palette, not a stated one — recommend visual confirmation against the live site before locking creative.",
+    "typography": {
+      "heading_font": null,
+      "body_font": null,
+      "note": "No Google Fonts / custom @font-face import was found on the homepage. CSS shows only the browser system-font stack (-apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, Noto Sans) and a long list of unused WordPress/Elementor theme font-preset utility classes (Inter, Poppins, Montserrat, etc. are available as presets in the theme but no evidence any specific one is the applied heading/body font). Cannot ground a specific typeface without a screenshot/visual check — left null rather than guessed."
+    },
+    "imagery_style": "Blue-toned vector iconography and illustrated graphics on the homepage (rocket/skills imagery), combined with real headshot photography for instructors and student testimonials, plus a horizontal scrolling strip of recognizable tech-company logos (Amazon, Apple, Atlassian, Cisco, GitHub, Google, LinkedIn, Meta, Microsoft, Oracle, Uber, Walmart, Adobe). Clean, product-marketing / SaaS-style layout (WordPress + Elementor site), not editorial photography-led."
+  },
+  "tone_of_voice": {
+    "attributes": [
+      "outcome- and stats-led (leads with $ / ₹ figures)",
+      "credential-heavy (FAANG+/MAANG+, Tier-1 mentors named by company)",
+      "urgency and momentum-driven imperative CTAs (\"Turbocharge\", \"Pivot\", \"Book\", \"Join Next Webinar\")",
+      "AI-era relevance framing (\"Now Powered by AI\", \"Decode the 2025 Playbook\")",
+      "direct/second-person address (\"your career\", \"your instructors\")"
+    ],
+    "do": [
+      "lead with concrete, sourced numbers (salary, hikes, offers, instructor counts) — never invented ones",
+      "reference real named companies only where the site itself names them (testimonials, mentor bios, logo strip)",
+      "use short, imperative CTAs matching the site's own button copy (e.g. \"Book FREE Webinar\", \"Join Next Webinar\")",
+      "frame messaging around career transformation / AI-skills relevance, matching homepage section headers (\"Pivot to AI with Precision\", \"Upskill with Intent\")"
+    ],
+    "dont": [
+      "fabricate or round statistics beyond what a specific page states (the site's own stats are inconsistent across pages — see claims_guardrails)",
+      "state or imply a guaranteed job/salary outcome — no formal guarantee/refund policy was found anywhere on the site",
+      "use generic corporate stock-photo tone; site favors real instructor/alumni photos and company logos over generic imagery",
+      "mention or compare against named competitors — none appear anywhere on the site"
+    ]
+  },
+  "value_props": [
+    "Build AI skills that get you hired at FAANG+ / top-tech companies (homepage hero, https://interviewkickstart.com)",
+    "Turbocharge your career with real-world AI skills & interview prep from MAANG+ experts (homepage subhead, https://interviewkickstart.com)",
+    "10 Years of Transforming Careers. Now Powered by AI. (homepage, https://interviewkickstart.com)",
+    "Learn from 700+ instructors from Tier-1 tech firms (meta description, https://interviewkickstart.com)",
+    "Personalized coaching and mock interviews across 40+ role-specific courses (homepage/courses, https://interviewkickstart.com/courses)"
+  ],
+  "programs": [
+    "Agentic AI for SWE / TPM / EM / PM / Data Engineering (role-specific Agentic AI tracks) — https://interviewkickstart.com/agentic-ai-courses",
+    "Flagship Machine Learning Course — https://interviewkickstart.com/courses/flagship-machine-learning-course",
+    "Machine Learning Interview Masterclass — https://interviewkickstart.com/courses/machine-learning-interview-masterclass",
+    "Data Science Interview Masterclass — https://interviewkickstart.com/courses/data-science-interview-masterclass",
+    "Data Engineering Interview Masterclass — https://interviewkickstart.com/courses/data-engineering-interview-masterclass",
+    "Engineering Manager Interview Masterclass — https://interviewkickstart.com/courses/engineering-manager-interview-masterclass",
+    "Technical Program Manager Interview Masterclass — https://interviewkickstart.com/courses/technical-program-manager-interview-masterclass",
+    "Full-Stack / Front-End / Back-End / Android / iOS Engineering Interview Masterclasses — https://interviewkickstart.com/courses",
+    "Site Reliability Engineering Interview Masterclass — https://interviewkickstart.com/courses/site-reliability-engineering-interview-masterclass",
+    "Security Engineering Interview Masterclass — https://interviewkickstart.com/courses/security-engineering-interview-masterclass",
+    "Cloud Engineering Interview Masterclass — https://interviewkickstart.com/courses/cloud-engineering-interview-masterclass",
+    "Growth Product Manager Course — https://interviewkickstart.com/courses/growth-product-manager-course-interview-preparation",
+    "Generative AI for Product Managers — https://interviewkickstart.com/courses/generative-ai-for-product-managers",
+    "PwC India x IK Agentic AI Career Accelerator (India-specific) — https://interviewkickstart.com/in",
+    "EdgeUp — https://interviewkickstart.com/courses/edgeup"
+  ],
+  "proof_points": [
+    {
+      "claim": "$300,000+ average salary (global) / ₹70 LPA average salary (India)",
+      "source_url": "https://interviewkickstart.com and https://interviewkickstart.com/in"
+    },
+    {
+      "claim": "$1.2M highest offer (global) / ₹1.7Cr highest offer (India)",
+      "source_url": "https://interviewkickstart.com and https://interviewkickstart.com/in"
+    },
+    {
+      "claim": "700+ FAANG & Tier-1 / MAANG+ mentors",
+      "source_url": "https://interviewkickstart.com, https://interviewkickstart.com/courses, https://interviewkickstart.com/in"
+    },
+    {
+      "claim": "40+ courses tailored to tech roles",
+      "source_url": "https://interviewkickstart.com and https://interviewkickstart.com/in"
+    },
+    {
+      "claim": "Overall rating 4.8/5 (245 ratings); Glassdoor 4.75/5 (95 ratings); Trustpilot 4.9/5 (190 ratings)",
+      "source_url": "https://interviewkickstart.com/reviews"
+    },
+    {
+      "claim": "$312,275 average compensation package; 20,000 engineers have prepared with Interview Kickstart and secured offers",
+      "source_url": "https://interviewkickstart.com/courses"
+    },
+    {
+      "claim": "13,500+ experienced engineers trained (as stated on About page — NOTE: conflicts with 25,000+/27,000+ figures elsewhere on the site, see claims_guardrails)",
+      "source_url": "https://interviewkickstart.com/about-us"
+    },
+    {
+      "claim": "Featured by TIME as one of the 'World's Top EdTech Companies 2025'",
+      "source_url": "https://interviewkickstart.com"
+    },
+    {
+      "claim": "Featured in Forbes (Feb 26, 2024) regarding a $10M funding round; featured on CNBC TV18 regarding a Blume Ventures-led funding round",
+      "source_url": "https://interviewkickstart.com"
+    },
+    {
+      "claim": "Founded 2014; co-founders Soham Mehta (Chief Product & Technology Officer, ex-Microsoft/eBay/Box) and Ryan Valles (CEO)",
+      "source_url": "https://interviewkickstart.com/about-us"
+    }
+  ],
+  "claims_guardrails": {
+    "never_claim": [
+      "guaranteed job placement, guaranteed interview outcome, or guaranteed salary for any individual",
+      "any statistic not found verbatim (or as a clearly-labeled derived rollup) on the site",
+      "competitor comparisons or named competitor callouts — none appear anywhere on the site",
+      "medical/health-style before-after framing or unqualified superlatives not sourced from the site"
+    ],
+    "requires_verification": [
+      "Learner-count figure is inconsistent across pages: homepage says '25,000+ Tech Professionals', /in says '27,000+ professionals trained', /about-us says '13,500+ experienced engineers trained', /courses says '20,000 engineers... secured offers'. Pick one figure (with as-of date) and confirm with the marketing/data team before use in any ad.",
+      "Average salary hike figure is inconsistent: /courses says '66.5% Average salary hike', homepage says '60%+ Increase in salaries', /about-us says '₹23 LPA average salary hike' and '60% average salary increase', /in says '₹24 LPA Average salary hike'. Confirm the current, approved figure before use.",
+      "Highest-offer figure differs by market framing ($1.2M globally vs ₹1.7Cr on the India page) — confirm which currency framing to use for India-targeted creative and whether these represent the same underlying case or two different ones.",
+      "The phrase 'guaranteed success' appears once on the homepage ('...our flexible, personalized paths for guaranteed success') — this reads as marketing copy, not a formal guarantee/refund policy (none was found on the cost/FAQ page). Do not repurpose this phrase as a guarantee claim in ad copy without explicit legal/marketing sign-off.",
+      "No pricing (INR or USD) is published anywhere on the site — the cost guide page explicitly defers to a webinar/advisor call. Do not state or imply specific pricing in ads."
+    ],
+    "notes": "Salary/placement claims must be used verbatim from the site with the source cited above; no fabricated stats; no competitor mentions; no guarantee language beyond what the site itself uses (and even the site's one 'guaranteed success' phrase should be treated cautiously — see requires_verification)."
+  },
+  "audience_personas": [
+    {
+      "persona": "Senior SWE targeting FAANG+",
+      "grounding": "Fullstack/Backend/Frontend/Android/iOS Engineering Interview Masterclasses in the course catalog; testimonials from Sanjog Jadhav (SDE2, Amazon) and Tomasz Gorka (Software Engineer, Meta) on /reviews."
+    },
+    {
+      "persona": "Career-switcher pivoting into AI/ML",
+      "grounding": "Homepage section headers 'Pivot to AI with Precision' and 'Upskill with Intent'; Machine Learning / Data Science / Generative AI course tracks; Agentic AI course family."
+    },
+    {
+      "persona": "Engineering Manager / TPM seeking a leadership-level move at a top-tech company",
+      "grounding": "Engineering Management and Technical Program Manager Interview Masterclasses; testimonials referencing 'Director – TPM' (Savitha K) and a 'FAANG EM Role' (Minal Khodani) on /reviews."
+    },
+    {
+      "persona": "India-based tech professional seeking a global/US big-tech offer or India-based MAANG+ role",
+      "grounding": "India-localized /in page (₹70 LPA avg salary, ₹24 LPA avg hike, ₹1.7Cr highest offer) and the PwC India x IK Agentic AI Career Accelerator program listed there."
+    }
+  ],
+  "competitors_do_not_mention": {
+    "list": [],
+    "note": "No competitor names appear anywhere on interviewkickstart.com across the pages checked. A list of real-world competitors (e.g. other interview-prep or edtech platforms) was not fabricated here since it cannot be grounded in site content — if a suppression list is needed for ad copy review, source it separately (e.g. via a dedicated competitive-research pass) rather than inferring it from this brand extraction."
+  }
+}
