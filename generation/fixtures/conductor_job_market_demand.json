@@ -1,0 +1,34 @@
+[
+  {
+    "role_title": "AI Agent / Agentic AI Engineer",
+    "skill_or_signal": "agentic AI / LangGraph",
+    "postings_count": 1840,
+    "trend": "+31% MoM",
+    "period": "2026-06",
+    "source": "Market_Research.job_market_demand"
+  },
+  {
+    "role_title": "GenAI / LLM Engineer",
+    "skill_or_signal": "RAG + vector databases",
+    "postings_count": 2610,
+    "trend": "+18% MoM",
+    "period": "2026-06",
+    "source": "Market_Research.job_market_demand"
+  },
+  {
+    "role_title": "Machine Learning Engineer",
+    "skill_or_signal": "system design for ML systems",
+    "postings_count": 3920,
+    "trend": "+9% MoM",
+    "period": "2026-06",
+    "source": "Market_Research.job_market_demand"
+  },
+  {
+    "role_title": "Senior SWE (FAANG track)",
+    "skill_or_signal": "system design interview readiness",
+    "postings_count": 5100,
+    "trend": "+6% MoM",
+    "period": "2026-06",
+    "source": "Market_Research.job_market_demand"
+  }
+]

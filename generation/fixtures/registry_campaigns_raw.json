@@ -1,0 +1,51 @@
+[
+  {
+    "platform": "google",
+    "campaign_id": "16636249119",
+    "campaign_name": "IK-IN_Discovery_EdgeUp_InMarket_TechnologyIndustry_INDIA",
+    "status": "ENABLED",
+    "channel_type": "DISPLAY"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "222000111",
+    "campaign_name": "IK-IN_Brand_Flagship_INDIA",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "333000222",
+    "campaign_name": "IK-IN_YouTube_Awareness_Q3_INDIA",
+    "status": "ENABLED",
+    "channel_type": "VIDEO"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "444000333",
+    "campaign_name": "IK-IN_PMax_LevelUp_INDIA",
+    "status": "PAUSED",
+    "channel_type": "PERFORMANCE_MAX"
+  },
+  {
+    "platform": "linkedin",
+    "campaign_id": "444444444",
+    "campaign_name": "IK-IN_LinkedIn_EdgeUp_Conversation_EM_JF",
+    "status": "ACTIVE",
+    "channel_type": "SPONSORED_UPDATES"
+  },
+  {
+    "platform": "linkedin",
+    "campaign_id": "555000444",
+    "campaign_name": "IK-IN_LinkedIn_Outreach_Random_Test",
+    "status": "PAUSED",
+    "channel_type": "SPONSORED_UPDATES"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "666000555",
+    "campaign_name": "google_edgeup_nb_in_inmarket-tech-professionals_202607_test",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  }
+]

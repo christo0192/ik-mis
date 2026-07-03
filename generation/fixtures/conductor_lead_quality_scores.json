@@ -1,0 +1,30 @@
+[
+  {
+    "period_start": "2026-06-01",
+    "period_end": "2026-06-30",
+    "run_date": "2026-07-03",
+    "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+    "segment": "NB",
+    "leads": 41,
+    "quality_leads": 12,
+    "junk_leads": 29,
+    "quality_ratio": 0.293,
+    "spend_inr": 118000.0,
+    "cpl_inr": 2878.0,
+    "cpql_inr": 9833.3
+  },
+  {
+    "period_start": "2026-06-01",
+    "period_end": "2026-06-30",
+    "run_date": "2026-07-03",
+    "campaign_name": "IK-IN_NB_EdgeUp_ExactMatch_SystemDesignInterview_INDIA",
+    "segment": "NB",
+    "leads": 38,
+    "quality_leads": 24,
+    "junk_leads": 14,
+    "quality_ratio": 0.632,
+    "spend_inr": 96000.0,
+    "cpl_inr": 2526.3,
+    "cpql_inr": 4000.0
+  }
+]

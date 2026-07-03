@@ -28,6 +28,25 @@ not a static report. Dark, premium, motion-aware. No dashboard-template genericn
   - Unregistered-campaigns warning count (warn-first enforcement)
 - Every pipeline/department visible on this one page, each with its own zone/area.
 
+## 2b. Simplicity rule + pipeline caretaker bots (PM additions, 2026-07-04)
+
+- **Easy to use beats impressive.** The futuristic feel comes from motion, the graph, and
+  restraint — NOT from density. Anyone should understand the homepage in 10 seconds:
+  what's healthy, what needs review, what's the value being produced. If a decorative
+  element competes with comprehension, the decoration loses.
+- **Caretaker bots (homepage only):** each pipeline zone/node gets a small animated AI bot
+  mascot that gives the "little agents are taking care of this" feel. Bots are state-driven,
+  not random:
+  - pipeline healthy → bot idles/patrols contentedly around its pipeline
+  - run currently executing → bot "working" (busy animation at the node)
+  - data stale / run failed → bot investigating with a wrench-out "fixing it" animation,
+    and clicking the bot goes to that pipeline's run detail (the bot IS the alert)
+  - review queue piling up → bot carries items toward the review area / nudges
+- Bots appear ONLY on the homepage. Subpages stay clean and functional.
+- All motion (graph + bots) honors `prefers-reduced-motion` (bots freeze to static icons,
+  health still readable by color/badge). Performance budget: animations must never make
+  the data slow.
+
 ## 3. One page per pipeline (outputs + review live together)
 
 Separate pages, reached from the graph or a slim sidebar:

@@ -1,0 +1,23 @@
+[
+  {
+    "topic": "switching from backend to AI engineering",
+    "platform": "reddit r/developersIndia",
+    "volume_trend": "+42% threads QoQ",
+    "sample_intent": "career-switch",
+    "period": "2026-Q2"
+  },
+  {
+    "topic": "is system design prep worth it for senior roles",
+    "platform": "reddit r/leetcode",
+    "volume_trend": "steady high",
+    "sample_intent": "employed-upskilling",
+    "period": "2026-Q2"
+  },
+  {
+    "topic": "agentic AI skills as the 2026 differentiator for senior engineers",
+    "platform": "linkedin",
+    "volume_trend": "+55% posts QoQ",
+    "sample_intent": "employed-upskilling",
+    "period": "2026-Q2"
+  }
+]

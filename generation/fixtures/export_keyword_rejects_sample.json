@@ -1,0 +1,35 @@
+[
+  {
+    "run_date": "2026-07-03",
+    "run_id": "gate-2026-07-03-001",
+    "campaign_name": "google_search_nb_ncr_v1",
+    "segment": "NB",
+    "keyword": "free system design interview course pdf",
+    "reject_reason": "off-topic: freebie-seeker intent, no IK program match",
+    "relevance_score": 0.05,
+    "source_signal": "kw_search_term_perf: 0 quality leads / 4500 INR spend, 60 clicks (2026-07-02)",
+    "negative_candidate": true
+  },
+  {
+    "run_date": "2026-07-03",
+    "run_id": "gate-2026-07-03-001",
+    "campaign_name": "google_search_fte_ncr_v1",
+    "segment": "fte",
+    "keyword": "sarkari naukri 2026",
+    "reject_reason": "off-topic: government-job search intent, not tech interview prep",
+    "relevance_score": 0.02,
+    "source_signal": "kw_search_term_perf: 0 quality leads / 1200 INR spend, 30 clicks (2026-07-02)",
+    "negative_candidate": true
+  },
+  {
+    "run_date": "2026-07-03",
+    "run_id": "gate-2026-07-03-001",
+    "campaign_name": "google_search_nb_ncr_v1",
+    "segment": "NB",
+    "keyword": "system design interview course alternatives",
+    "reject_reason": "borderline: competitor-comparison intent, kept as a keyword candidate not a negative (informational tie-break, human review requested)",
+    "relevance_score": 0.55,
+    "source_signal": "job_market_demand: comparison-intent queries convert at 60% of direct-intent rate (2026-06 cohort)",
+    "negative_candidate": false
+  }
+]

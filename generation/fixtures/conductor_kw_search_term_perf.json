@@ -1,0 +1,30 @@
+[
+  {
+    "date": "2026-07-02",
+    "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+    "segment": "NB",
+    "keyword_or_term": "free coding interview questions pdf",
+    "term_type": "search_term",
+    "match_type": "broad",
+    "impressions": 2100,
+    "clicks": 96,
+    "ctr": 0.0457,
+    "avg_cpc_inr": 38.2,
+    "cost_inr": 3667.2,
+    "quality_score": null
+  },
+  {
+    "date": "2026-07-02",
+    "campaign_name": "IK-IN_NB_EdgeUp_ExactMatch_SystemDesignInterview_INDIA",
+    "segment": "NB",
+    "keyword_or_term": "system design interview course",
+    "term_type": "keyword",
+    "match_type": "exact",
+    "impressions": 5400,
+    "clicks": 210,
+    "ctr": 0.0389,
+    "avg_cpc_inr": 41.2,
+    "cost_inr": 8652.0,
+    "quality_score": 8
+  }
+]

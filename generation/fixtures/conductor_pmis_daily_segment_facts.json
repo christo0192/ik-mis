@@ -1,0 +1,16 @@
+[
+  {
+    "date": "2026-07-01",
+    "segment": "NB",
+    "spend": 15000.0,
+    "iql": 5,
+    "junk": 1
+  },
+  {
+    "date": "2026-07-02",
+    "segment": "LinkedIn",
+    "spend": 12000.0,
+    "iql": 6,
+    "junk": 1
+  }
+]

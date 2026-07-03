@@ -1,0 +1,52 @@
+[
+  {
+    "campaign_name": "IK-IN_NB_EdgeUp_ExactMatch_SystemDesignInterview_INDIA",
+    "platform": "google",
+    "segment": "NB",
+    "program": "edgeup",
+    "geo": "in",
+    "status": "active",
+    "registered_at": "2026-07-04T00:00:00+00:00",
+    "snapshot_date": "2026-07-04"
+  },
+  {
+    "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+    "platform": "google",
+    "segment": "NB",
+    "program": "edgeup",
+    "geo": "in",
+    "status": "active",
+    "registered_at": "2026-07-04T00:00:00+00:00",
+    "snapshot_date": "2026-07-04"
+  },
+  {
+    "campaign_name": "IK-IN_Discovery_EdgeUp_CustomIntent_MachineLearningJobs_INDIA",
+    "platform": "google",
+    "segment": "Discovery",
+    "program": "edgeup",
+    "geo": "in",
+    "status": "active",
+    "registered_at": "2026-07-04T00:00:00+00:00",
+    "snapshot_date": "2026-07-04"
+  },
+  {
+    "campaign_name": "IK-IN_LinkedIn_EdgeUp_Conversation_EM_JF",
+    "platform": "linkedin",
+    "segment": "LinkedIn",
+    "program": "edgeup",
+    "geo": "in",
+    "status": "active",
+    "registered_at": "2026-07-04T00:00:00+00:00",
+    "snapshot_date": "2026-07-04"
+  },
+  {
+    "campaign_name": "IK-IN_Google_NB_EdgeUp_Test_ZeroLeads",
+    "platform": "google",
+    "segment": "NB",
+    "program": "edgeup",
+    "geo": "in",
+    "status": "paused",
+    "registered_at": "2026-07-04T00:00:00+00:00",
+    "snapshot_date": "2026-07-04"
+  }
+]

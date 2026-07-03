@@ -1,0 +1,10 @@
+[
+  {
+    "run_date": "2026-07-03",
+    "segment": "LinkedIn",
+    "finding": "LinkedIn PWC AgenticAI campaign intro texts fatiguing: CTR -22% over 3 weeks",
+    "action": "Refresh intro copy with a new angle before next week's spend increase",
+    "rupees_at_stake": 42000.0,
+    "severity": "HIGH"
+  }
+]
