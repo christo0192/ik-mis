@@ -158,8 +158,8 @@ Connect three "departments" — **Intelligence** (existing market-research pipel
 
 ### Phases 2–4 — Milestone steps (re-plan in detail at each gate)
 
-- [ ] **Step 16: Phase 2 — Higgsfield-led Creative Unit + Meta enablement** [Spike Needed]
-  - Depends on: Step 15 + Phase-1 gate (drafts rated useful/adopted over 2–4 weeks)
+- [ ] **Step 16: Phase 2 — Higgsfield-led Creative Unit + Meta enablement** [Spike Needed] **[PARKED 2026-07-04 by user decision — Phase 3 proceeds without it on text assets; unpark when Phase 1 is proven and/or Meta spend begins]**
+  - Depends on: Step 15 + Phase-1 gate (drafts rated useful/adopted over 2–4 weeks) + explicit user unpark
   - Risk: High — greenfield creative gen; Higgsfield headless surface unverified; brand-safety critical.
   - [ ] SPIKE: Higgsfield scriptable/API vs interactive-only; fallback = human-triggered + `generate_image.py` headless.
   - [ ] **Meta enablement (deferred from Phase 0):** when Meta campaigns begin — Business app + system-user token; extend the dormant `meta-ads` server (currently 3 read-only tools, `$` hardcoded → fix to INR, add adset-level reads); wire into `.mcp.json`; add Meta campaigns to `campaign_registry`; Meta perf collector → BQ.
@@ -167,7 +167,7 @@ Connect three "departments" — **Intelligence** (existing market-research pipel
   - Done when: (defined at re-plan) an approved, on-brand, platform-sized asset set exists with brand_safe/format_valid flags and a pilot shows CTR/engagement uplift.
 
 - [ ] **Step 17: Phase 3 — Feedback loop + export packagers** [Complex]
-  - Depends on: Step 16
+  - Depends on: Step 15 + Phase-1 gate (Step 16 PARKED — the loop closes on TEXT assets first: keywords/copy launched via exports → measured → fed back; creative-asset feedback joins when Phase 2 unparks)
   - Risk: Medium — attribution granularity; export fidelity.
   - [ ] Re-plan atomic steps: `asset_performance_feedback` job (launched assets → Performance funnel + `lead_quality_scores` through `campaign_registry` + `utm_content`/ad-id ↔ `asset_id`); generators consume feedback (fatigue→refresh, winner→scale, junk-source→negative); export packagers (Google Ads Editor CSV / LinkedIn bundles; Meta when live); event trigger from Performance fatigue/negative recommendations.
   - Done when: (defined at re-plan) feedback rows label winner/neutral/loser correctly (on quality, not volume) for known campaigns, and an export uploads cleanly.

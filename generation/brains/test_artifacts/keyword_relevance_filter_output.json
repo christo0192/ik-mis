@@ -1,0 +1,169 @@
+{
+  "raw_reply": "```json\n[\n  {\n    \"keyword\": \"machine learning interview preparation online\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"relevant\",\n    \"relevance_score\": 0.93,\n    \"filter_reason\": \"Directly names IK's core ML interview-prep program with explicit paid-prep shopping intent ('preparation') and no ambiguity in persona.\"\n  },\n  {\n    \"keyword\": \"faang system design interview course\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"relevant\",\n    \"relevance_score\": 0.95,\n    \"filter_reason\": \"Core SWE-prep offering (system design) plus explicit FAANG persona qualifier and course-shopping intent -- textbook match.\"\n  },\n  {\n    \"keyword\": \"rag and vector database course for engineers\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"Discovery\",\n    \"relevance_verdict\": \"relevant\",\n    \"relevance_score\": 0.89,\n    \"filter_reason\": \"Names two seed-vocabulary AI/ML skills (RAG, vector database) with course intent and an explicit 'for engineers' persona qualifier, squarely in IK's AI-upskilling lane.\"\n  },\n  {\n    \"keyword\": \"engineering manager interview coaching\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"relevant\",\n    \"relevance_score\": 0.92,\n    \"filter_reason\": \"Matches IK's EM/leadership program area exactly, with coaching (paid-service) intent and a clear leadership persona.\"\n  },\n  {\n    \"keyword\": \"python snake care guide\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"irrelevant\",\n    \"relevance_score\": 0.05,\n    \"filter_reason\": \"Literal homonym -- 'care guide' signals pet-husbandry intent for the snake, not the programming language; zero tech-persona plausibility.\"\n  },\n  {\n    \"keyword\": \"data entry jobs work from home\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"irrelevant\",\n    \"relevance_score\": 0.08,\n    \"filter_reason\": \"Employment-seeking intent ('jobs') for a non-engineering, non-tech role -- classic budget-drain query, not interview-prep shopping.\"\n  },\n  {\n    \"keyword\": \"nursing exam coaching near me\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"Discovery\",\n    \"relevance_verdict\": \"irrelevant\",\n    \"relevance_score\": 0.05,\n    \"filter_reason\": \"Non-tech profession (nursing) entirely outside IK's domain, despite coaching/exam-prep intent structurally resembling a relevant query.\"\n  },\n  {\n    \"keyword\": \"class 10 maths tuition online\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"Discovery\",\n    \"relevance_verdict\": \"irrelevant\",\n    \"relevance_score\": 0.05,\n    \"filter_reason\": \"K-12 academic tutoring query -- wrong audience (school student) and wrong domain (maths tuition, not tech interview prep).\"\n  },\n  {\n    \"keyword\": \"python course\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"borderline\",\n    \"relevance_score\": 0.55,\n    \"filter_reason\": \"Tech skill with course-shopping intent, but 'python course' alone carries huge beginner/student search volume with no interview or career-transition signal -- persona is genuinely ambiguous, needs human match-type review.\"\n  },\n  {\n    \"keyword\": \"scrum master certification\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"borderline\",\n    \"relevance_score\": 0.45,\n    \"filter_reason\": \"Career-serious certification intent from a tech-adjacent professional, but scrum master isn't an IK program area (closest fit is TPM/EM) -- defensible either way, park for human review.\"\n  },\n  {\n    \"keyword\": \"aws certification worth it 2026\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"Discovery\",\n    \"relevance_verdict\": \"borderline\",\n    \"relevance_score\": 0.5,\n    \"filter_reason\": \"Seed-vocabulary skill (AWS) and career deliberation from a plausible persona, but 'worth it' signals research/consideration intent rather than prep-shopping, and targets a certification rather than an interview-prep program.\"\n  },\n  {\n    \"keyword\": \"free coding bootcamp with certificate\",\n    \"campaign_name\": \"IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA\",\n    \"segment\": \"NB\",\n    \"relevance_verdict\": \"irrelevant\",\n    \"relevance_score\": 0.15,\n    \"filter_reason\": \"Core intent is free-content-seeking ('free bootcamp with certificate'), which is monetization-hostile even though the topic (coding) is on-domain -- IK sells paid cohort programs.\"\n  }\n]\n```",
+  "parsed": [
+    {
+      "keyword": "machine learning interview preparation online",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "relevant",
+      "relevance_score": 0.93,
+      "filter_reason": "Directly names IK's core ML interview-prep program with explicit paid-prep shopping intent ('preparation') and no ambiguity in persona."
+    },
+    {
+      "keyword": "faang system design interview course",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "relevant",
+      "relevance_score": 0.95,
+      "filter_reason": "Core SWE-prep offering (system design) plus explicit FAANG persona qualifier and course-shopping intent -- textbook match."
+    },
+    {
+      "keyword": "rag and vector database course for engineers",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "Discovery",
+      "relevance_verdict": "relevant",
+      "relevance_score": 0.89,
+      "filter_reason": "Names two seed-vocabulary AI/ML skills (RAG, vector database) with course intent and an explicit 'for engineers' persona qualifier, squarely in IK's AI-upskilling lane."
+    },
+    {
+      "keyword": "engineering manager interview coaching",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "relevant",
+      "relevance_score": 0.92,
+      "filter_reason": "Matches IK's EM/leadership program area exactly, with coaching (paid-service) intent and a clear leadership persona."
+    },
+    {
+      "keyword": "python snake care guide",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "irrelevant",
+      "relevance_score": 0.05,
+      "filter_reason": "Literal homonym -- 'care guide' signals pet-husbandry intent for the snake, not the programming language; zero tech-persona plausibility."
+    },
+    {
+      "keyword": "data entry jobs work from home",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "irrelevant",
+      "relevance_score": 0.08,
+      "filter_reason": "Employment-seeking intent ('jobs') for a non-engineering, non-tech role -- classic budget-drain query, not interview-prep shopping."
+    },
+    {
+      "keyword": "nursing exam coaching near me",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "Discovery",
+      "relevance_verdict": "irrelevant",
+      "relevance_score": 0.05,
+      "filter_reason": "Non-tech profession (nursing) entirely outside IK's domain, despite coaching/exam-prep intent structurally resembling a relevant query."
+    },
+    {
+      "keyword": "class 10 maths tuition online",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "Discovery",
+      "relevance_verdict": "irrelevant",
+      "relevance_score": 0.05,
+      "filter_reason": "K-12 academic tutoring query -- wrong audience (school student) and wrong domain (maths tuition, not tech interview prep)."
+    },
+    {
+      "keyword": "python course",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "borderline",
+      "relevance_score": 0.55,
+      "filter_reason": "Tech skill with course-shopping intent, but 'python course' alone carries huge beginner/student search volume with no interview or career-transition signal -- persona is genuinely ambiguous, needs human match-type review."
+    },
+    {
+      "keyword": "scrum master certification",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "borderline",
+      "relevance_score": 0.45,
+      "filter_reason": "Career-serious certification intent from a tech-adjacent professional, but scrum master isn't an IK program area (closest fit is TPM/EM) -- defensible either way, park for human review."
+    },
+    {
+      "keyword": "aws certification worth it 2026",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "Discovery",
+      "relevance_verdict": "borderline",
+      "relevance_score": 0.5,
+      "filter_reason": "Seed-vocabulary skill (AWS) and career deliberation from a plausible persona, but 'worth it' signals research/consideration intent rather than prep-shopping, and targets a certification rather than an interview-prep program."
+    },
+    {
+      "keyword": "free coding bootcamp with certificate",
+      "campaign_name": "IK-IN_NB_EdgeUp_BroadMatch_CodingInterviewPrep_INDIA",
+      "segment": "NB",
+      "relevance_verdict": "irrelevant",
+      "relevance_score": 0.15,
+      "filter_reason": "Core intent is free-content-seeking ('free bootcamp with certificate'), which is monetization-hostile even though the topic (coding) is on-domain -- IK sells paid cohort programs."
+    }
+  ],
+  "validation": {
+    "verdicts": {
+      "machine learning interview preparation online": [
+        "relevant",
+        0.93,
+        "Directly names IK's core ML interview-prep program with explicit paid-prep shopping intent ('preparation') and no ambiguity in persona."
+      ],
+      "faang system design interview course": [
+        "relevant",
+        0.95,
+        "Core SWE-prep offering (system design) plus explicit FAANG persona qualifier and course-shopping intent -- textbook match."
+      ],
+      "rag and vector database course for engineers": [
+        "relevant",
+        0.89,
+        "Names two seed-vocabulary AI/ML skills (RAG, vector database) with course intent and an explicit 'for engineers' persona qualifier, squarely in IK's AI-upskilling lane."
+      ],
+      "engineering manager interview coaching": [
+        "relevant",
+        0.92,
+        "Matches IK's EM/leadership program area exactly, with coaching (paid-service) intent and a clear leadership persona."
+      ],
+      "python snake care guide": [
+        "irrelevant",
+        0.05,
+        "Literal homonym -- 'care guide' signals pet-husbandry intent for the snake, not the programming language; zero tech-persona plausibility."
+      ],
+      "data entry jobs work from home": [
+        "irrelevant",
+        0.08,
+        "Employment-seeking intent ('jobs') for a non-engineering, non-tech role -- classic budget-drain query, not interview-prep shopping."
+      ],
+      "nursing exam coaching near me": [
+        "irrelevant",
+        0.05,
+        "Non-tech profession (nursing) entirely outside IK's domain, despite coaching/exam-prep intent structurally resembling a relevant query."
+      ],
+      "class 10 maths tuition online": [
+        "irrelevant",
+        0.05,
+        "K-12 academic tutoring query -- wrong audience (school student) and wrong domain (maths tuition, not tech interview prep)."
+      ],
+      "python course": [
+        "borderline",
+        0.55,
+        "Tech skill with course-shopping intent, but 'python course' alone carries huge beginner/student search volume with no interview or career-transition signal -- persona is genuinely ambiguous, needs human match-type review."
+      ],
+      "scrum master certification": [
+        "borderline",
+        0.45,
+        "Career-serious certification intent from a tech-adjacent professional, but scrum master isn't an IK program area (closest fit is TPM/EM) -- defensible either way, park for human review."
+      ],
+      "aws certification worth it 2026": [
+        "borderline",
+        0.5,
+        "Seed-vocabulary skill (AWS) and career deliberation from a plausible persona, but 'worth it' signals research/consideration intent rather than prep-shopping, and targets a certification rather than an interview-prep program."
+      ],
+      "free coding bootcamp with certificate": [
+        "irrelevant",
+        0.15,
+        "Core intent is free-content-seeking ('free bootcamp with certificate'), which is monetization-hostile even though the topic (coding) is on-domain -- IK sells paid cohort programs."
+      ]
+    },
+    "schema_errors": [],
+    "sensibility_flags": [],
+    "non_tech_leak": false,
+    "PASS": true
+  }
+}

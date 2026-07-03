@@ -94,6 +94,13 @@ Columns map directly to the `campaign_registry` Pydantic/BQ schema being defined
 
 ## 5. Open questions for the perf team
 
+> **ANSWERS (from PM, 2026-07-04):**
+> 1. **Funnel token → audience-style vocabulary** already used in real campaign names (`inmarket`, `technologyindustry`-style), NOT tofu/mofu/bofu. Format becomes `{platform}_{program}_{segment}_{geo}_{audience}_{yyyymm}_{freeform}` with `audience` drawn from a small controlled list built from the terms already live in names (to be enumerated during backfill).
+> 2. **utm_medium = `cpc`** for all LinkedIn campaign types. Confirmed.
+> 3. **Geo = `in` only** — everything is India. Confirmed; single value for now.
+> 4. **`other` program bucket is acceptable permanently**, with one requirement: the dashboard must let the team drill into what "Other" contains (list its campaigns), so it stays reviewable rather than becoming a junk drawer. → carried into Step 12 dashboard scope.
+> 5. **Enforcement = WARN-FIRST** (PM decision 2026-07-04): unregistered campaigns are processed but classified "Other/unknown" and flagged loudly on the dashboard ("N unregistered campaigns, attribution degraded"). After 2–4 clean weekly cycles, flip to hard-block via config (`REGISTRY_ENFORCEMENT=block`), no code change.
+
 1. **`funnel` stage** has no equivalent in any existing code — should it be `tofu`/`mofu`/`bofu`, or should we instead reuse the existing audience-targeting vocabulary seen in real names (`InMarket`, `TechnologyIndustry`) as the "funnel-ish" token instead of inventing TOFU/MOFU/BOFU?
 2. **`utm_medium` for LinkedIn** — is `cpc` correct for all LinkedIn campaign types the team runs (Sponsored Content, Sponsored InMail, Thought Leader Ads), or does InMail warrant its own medium value (e.g. `paid-inmail`) for cleaner reporting splits?
 3. **Geo scope beyond `in`** — is India the only geo today across both platforms, or are there any non-India campaigns live that need a second geo value now rather than later?
