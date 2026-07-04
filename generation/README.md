@@ -1154,4 +1154,277 @@ spot-checked directly (not just via the `tests_export.py` assertion) --
 and, specifically, **no `"crack the interview"`-style term or other
 interview-prep buyer intent appears anywhere in the output CSV** -- the
 false-positive incident that motivated this migration does not recur
+
+## Step 13: Slack notify digest (`notify_slack.py`)
+
+Post-run digest, **notify-only** -- zero interactive elements (no buttons,
+no Slack callbacks, no approve/reject mechanics). The dashboard (Step 12,
+Mission Control) is the sole approve/reject anchor; this is a summary +
+deep link, nothing else. Never writes to BigQuery (verified in
+`tests_notify.py` via an AST walk over the module's own source -- no
+`*.write_rows(...)` call exists anywhere in it).
+
+Reads, for the latest (or `--run-date`-pinned) `run_date`:
+- `generation_runs` -- per-path stats (candidates/pass/borderline/reject).
+- `keyword_candidates` -- counts by `relevance_verdict` + `status`, top-5 by `relevance_score`.
+- `ad_copy_drafts` -- counts by `status`, top-5 headlines.
+
+Read strategy (lazy, degrades gracefully -- mirrors `lead_quality.py`'s
+`get_read_client()` pattern exactly, own credential resolution, SELECT-only):
+`--from-fixture` (skips BQ entirely) > live BigQuery > local DRY_RUN staging
+preview (`generation/staging/bq_preview_<table>.json`, the same files
+`bq_writer.py` itself writes) > an explicit "no data available yet" notice
+(never a crash, never a fake 0-count claim rendered as if data existed).
+
+Posting: shells out to `slack_post.py` via `subprocess` (per this task's
+"post via slack_post.py's mechanism" instruction) -- this module carries no
+Slack credentials or HTTP logic of its own. Resolves the script path the
+same `IK_MCP_DIR`-with-WSL-fallback way `collect_kw_perf.py` resolves
+`google-ads/.env` (override: `SLACK_POST_SCRIPT`).
+
+```bash
+# Dry-run (default) -- prints the composed message instead of posting
+python3 notify_slack.py
+
+# Post for real
+python3 notify_slack.py --no-dry-run
+
+# Pin the run date
+python3 notify_slack.py --run-date 2026-07-04
+
+# Test without BigQuery credentials or a real Slack post: everything reads
+# from a fixture dict (generation_runs/keyword_candidates/ad_copy_drafts keys)
+python3 notify_slack.py --from-fixture /path/to/digest_fixture.json --no-dry-run
+```
+
+`MIS_DASHBOARD_URL` (env, default `http://localhost:3000/generation`) is the
+deep link every digest carries back to the Mission Control review queue --
+update it once the dashboard (Step 12) is actually deployed.
+
+**Tests** (`tests_notify.py`, 36 assertions, plain `check()` harness like
+`tests_gate.py`/`tests_export.py` -- no pytest): structured digest counts +
+top-N sort order, the zero-data edge case (renders an explicit notice, not a
+fake 0-count claim), rendered text has no interactive-element artifacts,
+`resolve_run_date` picks the max fixture `run_date` / honors an explicit
+override, `post_digest` dry-run never shells out, the AST-based
+no-BQ-write-calls invariant, and a subprocess end-to-end CLI run
+(`--dry-run`, never posts for real). `uvx ruff check` clean.
+
+## Step 14: schedule the generator (`run_daily.sh`, `fly-deploy/`, `fly.toml`, `cloudflare-trigger/`)
+
+**Chain** (`run_daily.sh`, MIS repo root): `collect_kw_perf` -> `lead_quality`
+(Mondays-IST-only, via `TZ='Asia/Kolkata' date +%u`, unless `--force`/
+`FORCE_LEAD_QUALITY=true`) -> `generate_assets` -> `gate_keywords` ->
+`export_negatives` -> `instrument` -> `notify_slack`. Per-step logging
+(`[run_daily] <UTC-ts> [<step>] starting/OK/FAILED`); **a non-zero exit
+stops the chain immediately** (deliberately fail-fast, unlike the
+anomaly-engine's own `run-daily.sh` which accumulates failures and keeps
+going -- this step's PLAN.md entry calls for the stricter behavior).
+`DRY_RUN` is read from the environment (default `true`, matching
+`config.py`'s own default) and propagates to every child process unchanged.
+
+```bash
+./run_daily.sh                          # DRY_RUN=true (default); lead_quality only on Mondays IST
+DRY_RUN=false ./run_daily.sh            # live run
+FORCE_LEAD_QUALITY=true ./run_daily.sh  # run lead_quality regardless of weekday
+GENERATION_PYTHON_BIN=/path/to/venv/bin/python3 ./run_daily.sh   # local testing outside the container
+```
+
+**Fly deploy** (`fly.toml` at the MIS repo root; `fly-deploy/Dockerfile` +
+`fly-deploy/entrypoint.sh`) -- pattern cloned from the proven
+`/mnt/c/mcp-servers/anomaly-engine/fly-deploy/` (Node 20 +
+`@anthropic-ai/claude-code`, non-root `appuser`, `restart=never`, no
+`[http_service]`) and `spikes/claude-p-fly/` (the OAuth-on-Fly pattern that
+passed twice). Build context is **this repo's root**, not a shared
+`mcp-servers` context -- `fly-deploy/vendor/slack-tools/slack_post.py` is a
+verbatim vendored copy of the mcp-servers original (its own docstring
+explains why: cross-repo `COPY` isn't available the way anomaly-engine's
+Dockerfile gets it from a shared `C:\mcp-servers` build root).
+
+App: **`ik-ad-generator`**, region `sin`, `shared-cpu-1x` / **1024mb**
+(no Chromium/Playwright here, unlike `ik-anomaly` -- text-only pipeline),
+`restart.policy = "never"`, no `[http_service]`.
+
+Secrets set (`flyctl secrets ... -a ik-ad-generator`):
+| Secret | Contents |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | long-lived Claude Code OAuth token (imported via `flyctl secrets import --stage`; source file deleted immediately after) |
+| `GOOGLE_ADS_ENV_B64` | base64 of `/mnt/c/mcp-servers/google-ads/.env` |
+| `SLACK_ENV_B64` | base64 of `/mnt/c/mcp-servers/slack-tools/.env` |
+| `GENERATION_BQ_SERVICE_ACCOUNT_B64` | base64 of `/mnt/c/Users/Admin/.gcp-keys/claude-code-dev-bq.json` |
+
+`entrypoint.sh` materializes these into `/app/google-ads/.env`,
+`/app/slack-tools/.env`, and `/tmp/generation_bq_service_account.json`
+(exported as `GENERATION_BQ_SERVICE_ACCOUNT`) -- same `IK_MCP_DIR=/app`
+layout `collect_kw_perf.py`/`notify_slack.py` already expect. One BQ key
+covers both write (`bq_writer.py`) and read (`notify_slack.py`/
+`instrument.py`/`lead_quality.py`'s lazy read clients) -- `claude-code-dev-bq@`
+is already the writer identity for `SIP_pattern_rag`/`ce_*`, so no separate
+`GENERATION_BQ_READ_SERVICE_ACCOUNT` secret was needed.
+
+**Deploy + smoke test, both run** (2026-07-04, DRY_RUN=true throughout --
+no live BigQuery writes, no real Slack post):
+
+1. `fly apps create ik-ad-generator` -- created.
+2. `fly deploy . --config fly.toml --dockerfile fly-deploy/Dockerfile`
+   -- built (269 MB image), created 1 primary ("app") machine + 1 standby
+   (Fly's default HA pair; the standby only takes over on host hardware
+   failure). **Fly starts a freshly-deployed machine immediately** -- this
+   ran the *entire* chain once, unattended, under `DRY_RUN=true` (the
+   default), and it completed clean: `[run_daily] ... daily run COMPLETE --
+   all steps ok`, exit 0, machine did not auto-restart (`restart.policy` = 'no'
+   honored).
+3. Explicit smoke test per this task's instruction (`fly machine run . --env
+   DRY_RUN=true`): the **first** attempt used Fly's ad-hoc-run default
+   sizing (256mb, not this app's configured 1024mb) and **OOM-killed**
+   `collect_kw_perf.py` (`exit=137`); `run_daily.sh`'s fail-fast guard
+   correctly stopped the chain rather than continuing past a crashed step
+   -- a real, useful validation of that behavior. Also observed: `fly
+   machine run` without an explicit `--restart` flag defaults to
+   restart-always, not this app's `fly.toml` `restart=never`, so the OOM'd
+   machine kept respawning until stopped manually. **Fix**: re-ran with
+   explicit `--vm-memory 1024 --restart no`; that run completed cleanly
+   end-to-end (see log excerpt below), and the mis-sized machine was
+   stopped + destroyed.
+4. Both leftover ad-hoc machines from step 3 were destroyed after
+   verification; the app now has exactly the 2 machines `fly deploy`
+   itself created (matching `ik-anomaly`'s own pattern).
+
+**Smoke-test log tail** (machine `48ee749f764478`, 1024mb, `restart=no`):
+
+```
+[run_daily] ... ik-ad-generator daily run (Saturday, UTC)
+[run_daily] ... GENDIR=/app/generation PYTHON=python3 DRY_RUN=true FORCE_LEAD_QUALITY=false
+[run_daily] ... [collect_kw_perf] starting: python3 /app/generation/collect_kw_perf.py
+[run_daily] ... [collect_kw_perf] OK
+[run_daily] ... [lead_quality] SKIPPED -- not Monday IST (weekday=6); pass --force or set FORCE_LEAD_QUALITY=true to override
+[run_daily] ... [generate_assets] starting: python3 /app/generation/generate_assets.py
+[run_daily] ... [generate_assets] OK
+[run_daily] ... [gate_keywords] starting: python3 /app/generation/gate_keywords.py
+[run_daily] ... [gate_keywords] OK
+[run_daily] ... [export_negatives] starting: python3 /app/generation/export_negatives.py
+[run_daily] ... [instrument] OK
+[run_daily] ... [notify_slack] starting: python3 /app/generation/notify_slack.py
+[run_daily] ... [notify_slack] OK
+[run_daily] ... ================ ik-ad-generator daily run COMPLETE -- all steps ok ================
+```
+
+(`export_negatives` -> `instrument` transition confirms `export_negatives`
+also returned OK -- `run_step` only logs `[instrument] starting` after the
+prior step's `run_step` call returns 0.) The Monday-IST guard fired
+correctly (deploy day was a Saturday, `weekday=6`, `lead_quality` skipped as
+designed). `notify_slack` printed its `[DRY RUN] Would post to Slack:`
+block (no live post) with `dashboard_url` = the `fly.toml` `[env]` default.
+
+**Cloudflare Worker** (`cloudflare-trigger/`, cron `30 5 * * *` = 05:30 UTC
+= **11:00 AM IST**, one hour after Performance's own `ik-anomaly` run at
+10:00 AM IST): scaffolded (cloned from `anomaly-engine/cloudflare-trigger/`,
+retargeted at `FLY_APP=ik-ad-generator`) and `npm install` completed
+locally, but **not deployed** -- the harness's permission layer denied the
+`wrangler secret put` step for this session (classified as writing a live
+Fly deploy token into a third-party secret store beyond this task's
+authorized scope), even though `wrangler` itself is authenticated on this
+machine (confirmed via `wrangler whoami`'s scope list, same account that
+already runs `ik-anomaly-trigger`/`sip-pipeline-trigger`). **User-owned
+remaining steps** (from `cloudflare-trigger/`):
+
+```powershell
+cd "C:\Users\Admin\Claude projects\MIS\cloudflare-trigger"
+npm install   # already done as of this task; re-run if node_modules is missing
+
+# 1. Mint a Fly deploy token scoped to just this app (20-year default expiry --
+#    consider a shorter one). NOTE: this task already minted one during the
+#    build ("ik-ad-generator-trigger (cloudflare worker)") but could not use
+#    it -- either revoke it (fly dashboard -> ik-ad-generator -> Tokens) and
+#    mint a fresh one, or reuse it if you still have it saved.
+C:\Users\Admin\.fly\bin\flyctl.exe tokens create deploy -a ik-ad-generator -n "ik-ad-generator-trigger"
+
+# 2. Set it as a Worker secret (paste the token from step 1 when prompted)
+wrangler secret put FLY_TOKEN
+
+# 3. Set the target machine ID (the PRIMARY "app" machine, not the standby --
+#    check with `flyctl machine list -a ik-ad-generator`; as of this deploy
+#    that's e820794c74d708)
+wrangler secret put FLY_MACHINE_ID
+
+# 4. Deploy the Worker
+wrangler deploy
+
+# 5. Verify
+wrangler trigger ik-ad-generator-trigger --remote
+```
+
+## Step 15: value-ledger + acceptance-rate instrumentation (`instrument.py`)
+
+**Read-only, report-only** -- no `bq_writer.write_rows()` call anywhere in
+this module (verified in `tests_instrument.py` via the same AST-walk
+technique `tests_notify.py` uses; the module doesn't even import
+`bq_writer`, only `notify_slack`'s lazy read client). Every number is a
+derived aggregation over what other jobs already logged.
+
+Computes, over a trailing `--window-days` window ending on the anchor run
+date (default: latest available across fixture/live BQ/staging preview):
+
+1. **Filter pass/drop rates** -- per the single latest run (`generation_runs`
+   by `path`) and rolling (summed across the window). Null-safe: a path that
+   never populates `passed_filter`/`borderline`/`rejected` (e.g. "copy"/
+   "angle" -- filter-pass is a keyword-path-only concept) reports `None`,
+   not a misleading `0.0`, even summed across a multi-row window.
+2. **Acceptance rate per asset type** -- `approved / (approved + rejected)`,
+   null-safe (`None`, not `ZeroDivisionError`, for the "zero-reviewed" edge
+   case), for `keyword_candidates`/`ad_copy_drafts`/`audience_angles`, plus
+   a combined total.
+3. **Weekly `value_ledger` rollup** -- expected vs. realized ₹ impact by
+   `action_type`, over the window.
+4. **CPQL trend** -- average `cpql_inr` from `lead_quality_scores`, this
+   window vs. the prior window of equal length.
+5. **The headline block**: `waste eliminated ₹X (basis) · CPQL trend: ... ·
+   acceptance Y%` -- prefers *realized* ₹ waste-eliminated figures over
+   *projected* ones (falls back to projected, clearly labeled, while
+   nothing has been realized yet); prints "insufficient data"/"no reviews
+   yet" instead of a fake 0/0.0% when there's nothing to compute from.
+6. **30/60/90 milestone tracking** against `GENERATION_PROJECT_START_DATE`
+   (env, default `2026-07-01` -- the approximate Phase-0 build start per
+   this file's own status log; override once a firmer "Phase 1 launch"
+   date is agreed).
+
+```bash
+python3 instrument.py                                   # 7-day window, prints formatted report
+python3 instrument.py --window-days 30
+python3 instrument.py --run-date 2026-07-04 --window-days 7
+python3 instrument.py --json                            # machine-readable
+python3 instrument.py --from-fixture /path/to/instrument_fixture.json
+```
+
+**Tests** (`tests_instrument.py`, 67 assertions): `_safe_ratio`'s null-safety
+primitive (including `numerator=None` "unmeasured" vs. `denominator=0`
+"zero-reviewed" -- two different reasons for `None`); hand-computed filter
+rates (per-run and rolling, including the unmeasured-path-stays-`None` case
+across a multi-row sum); hand-computed acceptance rates including the
+all-zero-reviewed edge case; hand-computed `value_ledger` rollup and the
+realized-preferred-over-projected waste figure; hand-computed CPQL trend
+(including no-prior-baseline and all-null-values); headline-block string
+format assertions (both the populated and the zero-data/insufficient-data
+cases); milestone gate math; an end-to-end `build_report()` against a full
+fixture; the no-BQ-write-calls invariant; and a subprocess CLI run (text +
+`--json`). `uvx ruff check` clean.
+
+## Deviations from PLAN.md's literal wording (Steps 13-15)
+
+- **Step 13** says "counts by platform/segment/verdict"; `keyword_candidates`
+  doesn't carry a `platform` column (that's an `ad_copy_drafts`/
+  `audience_angles` field) and the digest is scoped to a single `run_date`
+  rather than segment -- implemented as counts by **path** (from
+  `generation_runs`) + **verdict**/**status** (from `keyword_candidates`) +
+  **status** (from `ad_copy_drafts`), which is what those tables actually
+  carry at this grain.
+- **Step 15**'s "weekly rollup" is implemented as a read-time aggregation
+  `instrument.py` computes and prints on demand (any `--window-days`, not
+  hardcoded to 7) rather than a new row type written back to `value_ledger`
+  -- keeps this module strictly read-only, which also means it cannot
+  interfere with the other in-flight agent's live BigQuery writes.
+- Cloudflare Worker deploy: scaffolded + `npm install`'d, but the actual
+  `wrangler secret put`/`wrangler deploy` steps were blocked by the
+  session's permission layer (see Step 14 above) -- documented as exact
+  user-owned commands instead, per this task's own fallback instruction.
 against real data at real scale.

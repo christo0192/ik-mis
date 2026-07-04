@@ -1,0 +1,32 @@
+# Cloudflare Worker -- daily trigger for the ik-ad-generator Fly app.
+# Fires at 05:30 UTC = 11:00 AM IST, POSTs Fly Machines API to start
+# `ik-ad-generator`. Scheduled 1 hour after Performance's own ik-anomaly
+# run (10:00 AM IST / 04:30 UTC) per PLAN.md Step 14, so the Generation
+# department's collect_kw_perf/lead_quality reads land after that day's
+# Performance-side collection has a chance to finish; and aligned to
+# Intelligence's weekly cadence for the Monday-only lead_quality step
+# (see run_daily.sh's IST-weekday guard).
+#
+# Cloned from the proven /mnt/c/mcp-servers/anomaly-engine/cloudflare-trigger/
+# (same account, same Worker shape, own cron + own Fly app target).
+#
+# Deploy:  wrangler deploy
+# Secrets: wrangler secret put FLY_TOKEN ; wrangler secret put FLY_MACHINE_ID
+
+name = "ik-ad-generator-trigger"
+main = "src/index.ts"
+compatibility_date = "2025-12-01"
+workers_dev = false
+account_id = "bbb3aa03755ccab33b6367bb6367294c"   # same Cloudflare account as ik-anomaly-trigger; non-secret
+
+# 05:30 UTC = 11:00 IST (UTC+5:30) -- 1 hour after ik-anomaly's 04:30 UTC / 10:00 IST run.
+[triggers]
+crons = ["30 5 * * *"]
+
+[vars]
+FLY_APP = "ik-ad-generator"
+# FLY_MACHINE_ID set via `wrangler secret put FLY_MACHINE_ID` after first `fly deploy`.
+
+[observability]
+enabled = true
+head_sampling_rate = 1

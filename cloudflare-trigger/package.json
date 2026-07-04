@@ -1,0 +1,15 @@
+{
+  "name": "ik-ad-generator-trigger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker cron that starts the ik-ad-generator Fly machine at 11:00 AM IST",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240512.0",
+    "wrangler": "^3.60.0"
+  }
+}

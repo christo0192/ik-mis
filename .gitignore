@@ -12,3 +12,7 @@ generation/staging/*.json
 # Local env files
 .env
 *.local
+
+# cloudflare-trigger/ (Step 14) -- npm install artifacts, not source
+cloudflare-trigger/node_modules/
+cloudflare-trigger/package-lock.json

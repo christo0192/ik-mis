@@ -1,0 +1,35 @@
+# Fly.io config -- ik-ad-generator (PLAN.md Phase 1 Step 14). Scheduled
+# batch, not a web service -- separate app from ik-anomaly/sip-pipeline.
+#
+# Architecture (mirrors /mnt/c/mcp-servers/anomaly-engine/fly.toml exactly):
+#   Cloudflare Worker cron (cloudflare-trigger/, 05:30 UTC = 11:00 AM IST,
+#   after Performance's own ik-anomaly run at 10:00 AM IST)
+#     --> Fly Machines API: start this app's single machine
+#     --> entrypoint.sh materializes secrets -> run_daily.sh runs the chain
+#     --> machine exits; Fly auto-stops it (billed only for the run's
+#         duration, roughly once a day)
+#
+# Deploy FROM THE MIS REPO ROOT:
+#   fly deploy . --config fly.toml --dockerfile fly-deploy/Dockerfile
+
+app = 'ik-ad-generator'
+primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom had no capacity 2026-06-05)
+
+# No [http_service] -- scheduled batch, not a web service. Runs to
+# completion, exits.
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1024mb'   # no Chromium/Playwright here (unlike ik-anomaly); Node CLI + Python is comfortable at 1GB
+
+[[restart]]
+  policy = "never"    # a failure must NOT auto-restart (would duplicate BQ writes + a Slack digest)
+
+[deploy]
+  strategy = "immediate"
+
+[env]
+  # Overridable via `fly deploy --env` or `flyctl secrets set` (as a var,
+  # not a secret, once a real value exists) -- no live dashboard URL yet
+  # per PLAN.md ("merge+deploy decision for dashboard" is still pending).
+  MIS_DASHBOARD_URL = "http://localhost:3000/generation"
