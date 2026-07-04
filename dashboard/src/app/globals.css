@@ -1,0 +1,117 @@
+@import "tailwindcss";
+
+/*
+ * MIS Mission Control — dark, premium theme.
+ * Deep navy/near-black neutrals, indigo accent, semantic status colors.
+ * Dark-mode-first per docs/dashboard-vision.md ("Core feel").
+ */
+
+:root {
+  --background: #05070c;
+  --surface: #0d1119;
+  --surface-raised: #12172224;
+  --foreground: #e7eaf2;
+  --muted: #8b93a8;
+  --border: #1f2534;
+  --accent: #818cf8; /* indigo-400, tuned for dark-bg contrast */
+  --accent-strong: #6366f1; /* indigo-500, for solid buttons */
+
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #fb7185;
+  --info: #38bdf8;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+html {
+  background: var(--background);
+  color: var(--foreground);
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Subtle ambient backdrop: a faint radial glow, not a gradient wallpaper. */
+.mc-backdrop {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(129, 140, 248, 0.10), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(56, 189, 248, 0.06), transparent 55%);
+}
+
+/* Thin, unobtrusive scrollbars for the data tables. */
+.scroll-thin::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: #2a3142;
+  border-radius: 9999px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/*
+ * Caretaker bot keyframes (docs/dashboard-vision.md §2b, homepage only).
+ * Gated with `motion-safe:` at the call site in caretaker-bot.tsx; the
+ * blanket prefers-reduced-motion override above is a second, belt-and-
+ * suspenders guard in case any animation utility slips through ungated.
+ */
+@keyframes bot-bob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-3px) rotate(-2deg); }
+}
+@keyframes bot-wiggle {
+  0%, 100% { transform: rotate(-4deg); }
+  50% { transform: rotate(4deg); }
+}
+@keyframes bot-sway {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(3px); }
+}
+@keyframes bot-blip {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes bot-alert {
+  0%, 100% { transform: scale(1); opacity: 0.35; }
+  50% { transform: scale(1.35); opacity: 0.05; }
+}
+@keyframes bot-wrench {
+  0%, 100% { transform: rotate(-18deg); }
+  50% { transform: rotate(18deg); }
+}
+@keyframes bot-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
