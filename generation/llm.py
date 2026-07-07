@@ -49,7 +49,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 CLAUDE_BIN = os.environ.get("GENERATION_CLAUDE_BIN", "claude")
 EXTRACT_MODEL = os.environ.get("GENERATION_EXTRACT_MODEL", "haiku")
 SYNTH_MODEL = os.environ.get("GENERATION_SYNTH_MODEL", "sonnet")
-LLM_TIMEOUT_S = int(os.environ.get("GENERATION_LLM_TIMEOUT_S", "600"))
+# 900s (was 600): the copy-path synth generates a large batch (85 ad_copy + 16
+# angles at live registry scale) and ran right at the 600s edge on 2026-07-07.
+# This is the single knob for every claude -p call's timeout -- the conductor
+# defers to it rather than hardcoding a per-call value.
+LLM_TIMEOUT_S = int(os.environ.get("GENERATION_LLM_TIMEOUT_S", "900"))
 # PLAN.md Step 4: concurrency stays 1 -- batch cadence on a dedicated machine.
 LLM_MAX_CONCURRENCY = int(os.environ.get("LLM_MAX_CONCURRENCY", "1"))
 

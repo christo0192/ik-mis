@@ -173,6 +173,29 @@ def _find_row(rows, path):
 
 
 # ---------------------------------------------------------------------------
+# (b2) registered-campaigns digest cap -- breadth-preserving truncation
+# ---------------------------------------------------------------------------
+def test_cap_registered_campaigns():
+    # Cap must preserve breadth across (platform, segment), not just take the
+    # first N. Build 30 campaigns across 3 segments x 2 platforms (5 each),
+    # cap to 6 -> expect one from every (platform, segment) group.
+    rows = []
+    for platform in ("google", "linkedin"):
+        for seg in ("NB", "CS", "DS"):
+            for i in range(5):
+                rows.append({"campaign_name": f"{platform}-{seg}-{i}",
+                             "segment": seg, "program": "P", "platform": platform,
+                             "status": "active"})
+    capped = G._cap_registered_campaigns(rows, 6)
+    check(len(capped) == 6, "cap trims 30 -> 6 rows")
+    groups = {(r["platform"], r["segment"]) for r in capped}
+    check(len(groups) == 6, "cap keeps one row from each of the 6 platform/segment groups (breadth preserved)")
+    # No-op when already within cap.
+    check(G._cap_registered_campaigns(rows[:4], 6) == rows[:4],
+          "cap is a no-op when input <= cap")
+
+
+# ---------------------------------------------------------------------------
 # (c) security-fenced assembly, independent of any LLM call
 # ---------------------------------------------------------------------------
 def test_assemble_prompt_injection():
@@ -303,6 +326,7 @@ def test_fixture_run_with_mock():
 
 
 if __name__ == "__main__":
+    test_cap_registered_campaigns()
     test_assemble_prompt_injection()
     test_load_source_degrades_on_missing_fixture()
     test_fixture_run_with_mock()

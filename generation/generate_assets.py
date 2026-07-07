@@ -101,6 +101,13 @@ PMIS_DATASET = lead_quality.PMIS_SOURCE_DATASET  # reuse Step 7's own env-driven
 # Digest size cap per source (PLAN.md: "keep each digest under ~150 rows").
 MAX_DIGEST_ROWS = int(os.environ.get("CONDUCTOR_MAX_DIGEST_ROWS", "20"))
 
+# The registered-campaigns allowlist is the one digest source with no LIMIT --
+# at live scale it's ~291 google+linkedin campaigns, which bloats the copy-path
+# prompt (a contributor to the 2026-07-07 near-timeout). Cap it for the digest;
+# registry.check() downstream is warn-only, so a campaign omitted here is never
+# dropped from output -- it just isn't offered to the brain as a target.
+MAX_REGISTERED_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_REGISTERED_CAMPAIGNS", "80"))
+
 _sanitize = collect_kw_perf._sanitize_error  # shared credential-fragment redaction
 
 
@@ -434,6 +441,33 @@ def load_registered_campaigns(from_fixture: Optional[str], platforms: tuple[str,
                 "program": entry.program, "platform": entry.platform,
                 "status": entry.status or "active",
             })
+    if len(out) > MAX_REGISTERED_CAMPAIGNS:
+        total = len(out)
+        out = _cap_registered_campaigns(out, MAX_REGISTERED_CAMPAIGNS)
+        log.info("registered_campaigns: capped %d -> %d for the digest "
+                 "(round-robin across platform/segment; registry.check stays "
+                 "warn-only so no output row is dropped)", total, len(out))
+    return out
+
+
+def _cap_registered_campaigns(rows: list[dict], cap: int) -> list[dict]:
+    """Trim the registered-campaigns allowlist to `cap` rows while preserving
+    breadth: round-robin across (platform, segment) groups (each kept in its
+    original order) so no segment silently vanishes from the brain's target set
+    when the registry is large."""
+    if len(rows) <= cap:
+        return rows
+    groups: dict[tuple, list] = {}
+    for r in rows:
+        groups.setdefault((r.get("platform"), r.get("segment")), []).append(r)
+    queues = list(groups.values())
+    out: list[dict] = []
+    while len(out) < cap and any(queues):
+        for q in queues:
+            if q:
+                out.append(q.pop(0))
+                if len(out) >= cap:
+                    break
     return out
 
 
@@ -618,7 +652,7 @@ def run_keyword_path(run_date_: date, run_id: str, from_fixture: Optional[str]) 
     prompt = assemble_prompt(brain_text, digest)
 
     try:
-        raw = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=600)
+        raw = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=llm.LLM_TIMEOUT_S)
         llm_calls = 1
     except Exception as e:
         log.error("keyword path: LLM synth failed: %s", _short_err(e))
@@ -659,7 +693,7 @@ def run_copy_path(run_date_: date, run_id: str, from_fixture: Optional[str]) -> 
     prompt = assemble_prompt(brain_text, digest)
 
     try:
-        raw = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=600)
+        raw = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=llm.LLM_TIMEOUT_S)
         llm_calls = 1
     except Exception as e:
         log.error("copy path: LLM synth failed: %s", _short_err(e))

@@ -226,7 +226,7 @@ def _judge_ambiguous(brain_text: str, ambiguous_rows: list[dict]) -> list[dict]:
         ],
     }
     prompt = assemble_prompt(brain_text, digest)
-    result = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=600)
+    result = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=llm.LLM_TIMEOUT_S)
     if not isinstance(result, list):
         raise ValueError("keyword_relevance_filter brain must return a JSON "
                          f"array, got {type(result).__name__}")

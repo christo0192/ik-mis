@@ -38,3 +38,9 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # silently kept every scheduled run in preview-only mode since deploy --
   # nothing landed live even on a fully successful run. Explicit now.
   DRY_RUN = "false"
+  # Copy-path synth ran right at the old hardcoded 600s ceiling on 2026-07-07
+  # (85 ad_copy + 16 angles at live registry scale). Raised to 900s for
+  # headroom; tunable here without a code change. Paired with a cap on the
+  # registered-campaigns digest (CONDUCTOR_MAX_REGISTERED_CAMPAIGNS, default 80)
+  # that shrinks the prompt itself.
+  GENERATION_LLM_TIMEOUT_S = "900"
