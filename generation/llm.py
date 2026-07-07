@@ -138,8 +138,17 @@ def call(prompt: str, model: str | None = None, timeout: int | None = None) -> s
             timeout=timeout,
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"claude -p ({model}) exit {proc.returncode}: "
-                               f"{(proc.stderr or '')[:300]}")
+            # Some claude CLI failure modes (auth/config errors in particular)
+            # write to stdout instead of stderr -- capture both so a future
+            # failure is actually diagnosable from logs (2026-07-07 scheduled
+            # run failed with an empty stderr-only message, hiding the cause).
+            detail = "; ".join(
+                s for s in (
+                    f"stderr={proc.stderr.strip()[:300]}" if proc.stderr and proc.stderr.strip() else "",
+                    f"stdout={proc.stdout.strip()[:300]}" if proc.stdout and proc.stdout.strip() else "",
+                ) if s
+            ) or "(no output on stdout or stderr)"
+            raise RuntimeError(f"claude -p ({model}) exit {proc.returncode}: {detail}")
         return (proc.stdout or "").strip()
     except (RuntimeError, subprocess.TimeoutExpired, FileNotFoundError):
         if not os.environ.get("ANTHROPIC_API_KEY"):

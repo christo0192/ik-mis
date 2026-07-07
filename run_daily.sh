@@ -91,7 +91,14 @@ run_step "gate_keywords" "$PYTHON" "$GENDIR/gate_keywords.py"
 
 # --- 5. export_negatives -- negative-keyword CSV + ₹ waste-baseline
 #     value_ledger entry (reads keyword_rejects + kw_search_term_perf).
-run_step "export_negatives" "$PYTHON" "$GENDIR/export_negatives.py"
+#     BUG FOUND 2026-07-07 (first fully-live scheduled run): the CLI's
+#     defaults are --terms-source staging (a local DRY_RUN preview file that
+#     collect_kw_perf no longer writes once DRY_RUN=false -- silently 0 rows,
+#     not an error) and --rejects-source fixture (canned test data -- every
+#     prior scheduled run blended 3 fake rows into the "real" negatives CSV
+#     without ever reading the live ce_keyword_rejects table). Explicit now.
+run_step "export_negatives" "$PYTHON" "$GENDIR/export_negatives.py" \
+  --terms-source bq --rejects-source bq
 
 # --- 6. instrument -- read-only value-ledger/acceptance-rate report.
 #     Never writes to BigQuery (see instrument.py's own module docstring);

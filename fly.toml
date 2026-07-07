@@ -33,3 +33,8 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # not a secret, once a real value exists) -- no live dashboard URL yet
   # per PLAN.md ("merge+deploy decision for dashboard" is still pending).
   MIS_DASHBOARD_URL = "http://localhost:3000/generation"
+  # BUG FOUND 2026-07-07: this was never set anywhere (not here, not as a
+  # secret), so bq_writer.py's `os.environ.get("DRY_RUN","true")` default
+  # silently kept every scheduled run in preview-only mode since deploy --
+  # nothing landed live even on a fully successful run. Explicit now.
+  DRY_RUN = "false"
