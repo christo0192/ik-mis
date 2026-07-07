@@ -16,3 +16,9 @@ generation/staging/*.json
 # cloudflare-trigger/ (Step 14) -- npm install artifacts, not source
 cloudflare-trigger/node_modules/
 cloudflare-trigger/package-lock.json
+
+# Generated negative-keyword CSV exports (regenerable, run-date-stamped)
+generation/exports/*.csv
+
+# Local Claude Code session/tooling state (scheduled-wakeup locks etc.)
+.claude/
