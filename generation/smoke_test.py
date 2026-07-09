@@ -56,6 +56,11 @@ SAMPLE_ROWS = {
         "filter_reason": None,
         "source_signal": "job_market_demand: 'system design' in 41% of postings (run 2026-06-28)",
         "status": "proposed",
+        # Keyword Planner demand-grounding fields (round-trip coverage for the
+        # 7 nullable additions).
+        "keyword_source": "both", "avg_monthly_searches": 5400, "competition": "MEDIUM",
+        "competition_index": 63, "top_of_page_bid_low_inr": 5.9,
+        "top_of_page_bid_high_inr": 54.7, "demand_flag": None,
     },
     "keyword_rejects": {
         "run_date": RUN_DATE, "run_id": RUN_ID,

@@ -116,7 +116,13 @@ HERE = Path(__file__).resolve().parent
 BRAIN_FILE = HERE / "brains" / "keyword_relevance_filter.md"
 
 _CANDIDATE_PASSTHROUGH_FIELDS = ("run_date", "run_id", "campaign_name", "segment",
-                                 "keyword", "match_type", "source_signal")
+                                 "keyword", "match_type", "source_signal",
+                                 # Keyword Planner demand fields carried through the
+                                 # gate unchanged (the gate scores relevance; it does
+                                 # not re-derive demand). See keyword_planner.py.
+                                 "keyword_source", "avg_monthly_searches", "competition",
+                                 "competition_index", "top_of_page_bid_low_inr",
+                                 "top_of_page_bid_high_inr", "demand_flag")
 _REJECT_PASSTHROUGH_FIELDS = ("run_date", "run_id", "campaign_name", "segment",
                               "keyword", "source_signal")
 

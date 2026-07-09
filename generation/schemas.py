@@ -91,6 +91,20 @@ class KeywordCandidateRow(_Row):
     ] = "proposed"
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
+    # --- Keyword Planner demand grounding (all NULLABLE; populated only when
+    # CONDUCTOR_ENABLE_KEYWORD_PLANNER is on -- see generation/keyword_planner.py).
+    # keyword_source: how this candidate arose -- "ai" (generator only),
+    # "keyword_planner" (real-searched expansion term), or "both" (AI term that
+    # Planner confirmed real demand for). demand_flag e.g. "no_planner_volume"
+    # marks an AI term Planner reported at/under the volume floor (kept, not
+    # dropped -- may be emerging demand ahead of search history).
+    keyword_source: Optional[str] = None                  # ai | keyword_planner | both
+    avg_monthly_searches: Optional[int] = Field(default=None, ge=0)
+    competition: Optional[str] = None                     # LOW | MEDIUM | HIGH | UNKNOWN
+    competition_index: Optional[int] = Field(default=None, ge=0, le=100)
+    top_of_page_bid_low_inr: Optional[float] = Field(default=None, ge=0)
+    top_of_page_bid_high_inr: Optional[float] = Field(default=None, ge=0)
+    demand_flag: Optional[str] = None                     # e.g. no_planner_volume
 
     @field_validator("source_signal")
     @classmethod
@@ -111,6 +125,11 @@ KEYWORD_CANDIDATES_BQ = [
     ("relevance_score", "FLOAT64", "REQUIRED"), ("filter_reason", "STRING", "NULLABLE"),
     ("source_signal", "STRING", "REQUIRED"), ("status", "STRING", "NULLABLE"),
     ("reviewed_by", "STRING", "NULLABLE"), ("reviewed_at", "TIMESTAMP", "NULLABLE"),
+    ("keyword_source", "STRING", "NULLABLE"), ("avg_monthly_searches", "INTEGER", "NULLABLE"),
+    ("competition", "STRING", "NULLABLE"), ("competition_index", "INTEGER", "NULLABLE"),
+    ("top_of_page_bid_low_inr", "FLOAT64", "NULLABLE"),
+    ("top_of_page_bid_high_inr", "FLOAT64", "NULLABLE"),
+    ("demand_flag", "STRING", "NULLABLE"),
 ]
 
 
