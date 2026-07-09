@@ -92,3 +92,28 @@ export function verdictVariant(verdict: string | null | undefined): BadgeVariant
       return "outline";
   }
 }
+
+// Keyword provenance: AI-generated, Keyword-Planner-sourced, or both.
+// A null source (candidate produced before the Planner path existed / was on)
+// reads as "AI".
+export function sourceLabel(source: string | null | undefined): string {
+  switch ((source ?? "").toLowerCase()) {
+    case "keyword_planner":
+      return "Planner";
+    case "both":
+      return "Both";
+    default:
+      return "AI";
+  }
+}
+
+export function sourceVariant(source: string | null | undefined): BadgeVariant {
+  switch ((source ?? "").toLowerCase()) {
+    case "keyword_planner":
+      return "high";
+    case "both":
+      return "success";
+    default:
+      return "outline";
+  }
+}
