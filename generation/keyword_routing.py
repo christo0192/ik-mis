@@ -7,15 +7,16 @@ follow-up changes 2026-07-10).
 Two independent, flag-gated gates applied AFTER candidate generation
 (+ Keyword Planner enrich/expand), BEFORE the raw-keyword staging write:
 
-1. route_by_topic() -- AI-topic keywords route to the EdgeUp program's
-   Coding-Interview search campaign; everything else (DSA, system design,
-   coding interview, algorithms, SWE, ...) routes to LevelUp's. "AI" is a
-   curated vocabulary (ML / deep learning + GenAI / LLM / agentic) matched on
-   word boundaries. The specific campaign is auto-resolved from the
-   campaign_registry (program + a `CI` name token, Google platform),
-   overridable per program via env so the exact live campaign can be pinned
-   after verification. campaign_name AND segment are set together to keep
-   attribution registry-consistent.
+1. route_by_topic() -- AI-topic keywords route to the EdgeUp program's SEARCH
+   campaign; everything else (DSA, system design, coding interview, algorithms,
+   SWE, ...) routes to LevelUp's. "AI" is a curated vocabulary (ML / deep
+   learning + GenAI / LLM / agentic) matched on word boundaries. The specific
+   campaign is auto-resolved from the campaign_registry (program + a `Search`
+   name token, non-search channels like Demand Gen / PMax excluded), but the
+   account has many search campaigns per program, so the recommended production
+   setup is to PIN the exact campaign per program via env
+   (KWP_EDGEUP_CAMPAIGN / KWP_LEVELUP_CAMPAIGN). campaign_name AND segment are
+   set together to keep attribution registry-consistent.
 
 2. exclude_running() -- positive ("new") candidates whose keyword is already an
    ENABLED keyword in the account are excluded (we already bid on them). The
@@ -51,8 +52,16 @@ _AI_PATTERN = re.compile(
 _WS = re.compile(r"\s+")
 
 # Per-program env pin: set to a live campaign_name to force all of that topic's
-# keywords into it (overrides the registry auto-pick). Verify then pin.
-_ENV_PIN = {"edgeup": "KWP_EDGEUP_CI_CAMPAIGN", "levelup": "KWP_LEVELUP_CI_CAMPAIGN"}
+# keywords into it (overrides the registry auto-pick). Verifying + pinning the
+# exact SEARCH campaign per program is the recommended production setup -- the
+# account has many search campaigns per program, so auto-pick is a fallback.
+_ENV_PIN = {"edgeup": "KWP_EDGEUP_CAMPAIGN", "levelup": "KWP_LEVELUP_CAMPAIGN"}
+
+# Non-search channels keywords must NEVER route to: Demand Gen / Discovery and
+# Performance Max target audiences, not manual keywords. This account names the
+# channel in the campaign_name (IK-IN_Discovery_..., IK-IN_PMax_...), and marks
+# real search campaigns with a `Search` token (IK-IN_Search_NB_EdgeUp_...).
+_NON_SEARCH_TOKENS = {"discovery", "demandgen", "pmax", "display", "video", "shopping"}
 
 
 def normalize(text: str) -> str:
@@ -64,45 +73,49 @@ def is_ai_keyword(text: str) -> bool:
     return bool(_AI_PATTERN.search(normalize(text)))
 
 
-def _has_ci_token(campaign_name: str) -> bool:
-    tokens = re.split(r"[\s_\-]+", normalize(campaign_name))
-    return "ci" in tokens
+def _is_search_campaign(campaign_name: str) -> bool:
+    """A campaign that can hold manual keywords: carries a `Search` token and no
+    non-search channel token. Deliberately strict -- an ambiguous campaign is
+    treated as non-search (we'd rather leave a keyword unrouted than drop it
+    into a Demand Gen / PMax campaign that silently ignores keywords)."""
+    tokens = set(re.split(r"[\s_\-]+", normalize(campaign_name)))
+    if tokens & _NON_SEARCH_TOKENS:
+        return False
+    return "search" in tokens
 
 
 def resolve_program_campaign(program: str, segment: str, reg=None) -> tuple[str | None, str]:
     """Resolve the target (campaign_name, segment) for a program.
 
-    Priority: env pin -> a registry Coding-Interview search campaign for the
-    program (prefer one matching `segment`, then 'comp', then 'courses', then
-    name order) -> any Google campaign in the program -> (None, segment) if the
-    program has no campaign at all (caller keeps the original campaign_name).
-    Returns the resolved campaign's own segment to keep campaign<->segment
-    consistent for attribution.
+    Priority: env pin -> a registry SEARCH campaign for the program (prefer one
+    matching `segment`, then a 'generic' one, then name order) -> (None, segment)
+    when the program has NO search campaign (caller keeps the candidate's
+    original campaign_name; keywords are never auto-routed to a non-search
+    channel). Returns the resolved campaign's own segment to keep
+    campaign<->segment consistent for attribution.
     """
     pin = os.environ.get(_ENV_PIN.get(program, ""), "").strip()
     if pin:
         return pin, segment
     reg = reg if reg is not None else _registry.load_registry()
-    entries = [
+    search = [
         e for e in reg.values()
         if (e.program or "").lower() == program
         and (e.platform or "google").lower() in ("google", "none", "")
+        and _is_search_campaign(e.campaign_name)
     ]
-    if not entries:
+    if not search:
         return None, segment
-    ci = [e for e in entries if _has_ci_token(e.campaign_name)]
-    pool = ci or entries
 
     def rank(e):
         n = normalize(e.campaign_name)
         return (
             0 if (e.segment or "") == segment else 1,
-            0 if "comp" in n else 1,
-            0 if "course" in n else 1,
+            0 if "generic" in n else 1,
             e.campaign_name,
         )
 
-    best = sorted(pool, key=rank)[0]
+    best = sorted(search, key=rank)[0]
     return best.campaign_name, (best.segment or segment)
 
 

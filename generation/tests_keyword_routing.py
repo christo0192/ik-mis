@@ -17,12 +17,21 @@ RUN_DATE = date(2026, 7, 10)
 RUN_ID = "routing-test"
 
 REG = {
-    "EdgeUp_CI_Comp_India": RegistryEntry(
-        campaign_name="EdgeUp_CI_Comp_India", platform="google", segment="NB", program="edgeup"),
-    "EdgeUp_InMarket_Tech": RegistryEntry(
-        campaign_name="EdgeUp_InMarket_Tech", platform="google", segment="Discovery", program="edgeup"),
-    "LevelUp_CI_DomainWise": RegistryEntry(
-        campaign_name="LevelUp_CI_DomainWise", platform="google", segment="DS", program="levelup"),
+    # A real SEARCH campaign (the valid keyword target) ...
+    "IK-IN_Search_NB_EdgeUp_Generic_AI_35-54": RegistryEntry(
+        campaign_name="IK-IN_Search_NB_EdgeUp_Generic_AI_35-54", platform="google",
+        segment="NB", program="edgeup"),
+    # ... and a Discovery/Demand-Gen one that must NEVER be picked for keywords.
+    "IK-IN_Discovery_EdgeUp_CI_Comp_India": RegistryEntry(
+        campaign_name="IK-IN_Discovery_EdgeUp_CI_Comp_India", platform="google",
+        segment="Discovery", program="edgeup"),
+    "IK-IN_Search_NB_LevelUp_Generic_Allsale_HI_INDIA": RegistryEntry(
+        campaign_name="IK-IN_Search_NB_LevelUp_Generic_Allsale_HI_INDIA", platform="google",
+        segment="DS", program="levelup"),
+    # LevelUp PMax — must never be picked either.
+    "IK-IN_PMax_LevelUp_INDIA": RegistryEntry(
+        campaign_name="IK-IN_PMax_LevelUp_INDIA", platform="google",
+        segment="Other", program="levelup"),
 }
 
 
@@ -51,17 +60,24 @@ def test_is_ai_keyword():
 
 def test_resolve_program_campaign():
     c, s = kr.resolve_program_campaign("edgeup", "NB", REG)
-    check(c == "EdgeUp_CI_Comp_India" and s == "NB", "edgeup -> CI campaign (segment-matched)")
+    check(c == "IK-IN_Search_NB_EdgeUp_Generic_AI_35-54" and s == "NB",
+          "edgeup -> SEARCH campaign (never the Discovery one)")
     c, s = kr.resolve_program_campaign("levelup", "DS", REG)
-    check(c == "LevelUp_CI_DomainWise" and s == "DS", "levelup -> CI campaign")
+    check(c == "IK-IN_Search_NB_LevelUp_Generic_Allsale_HI_INDIA" and s == "DS",
+          "levelup -> SEARCH campaign (never PMax)")
     c, s = kr.resolve_program_campaign("edgeup", "CS", {})
-    check(c is None and s == "CS", "no program campaigns -> (None, original segment)")
-    os.environ["KWP_EDGEUP_CI_CAMPAIGN"] = "EdgeUp_Pinned_Manual"
+    check(c is None and s == "CS", "no search campaign -> (None, original segment)")
+    # A program with ONLY non-search campaigns must resolve to None, not the PMax/Discovery one.
+    only_pmax = {"p": RegistryEntry(campaign_name="IK-IN_PMax_LevelUp_INDIA",
+                                    platform="google", segment="Other", program="levelup")}
+    c, s = kr.resolve_program_campaign("levelup", "DS", only_pmax)
+    check(c is None, "program with only non-search campaigns -> None (never routes keywords to PMax)")
+    os.environ["KWP_EDGEUP_CAMPAIGN"] = "IK-IN_Search_NB_EdgeUp_Pinned"
     try:
         c, s = kr.resolve_program_campaign("edgeup", "CS", REG)
-        check(c == "EdgeUp_Pinned_Manual", "env pin overrides registry auto-pick")
+        check(c == "IK-IN_Search_NB_EdgeUp_Pinned", "env pin overrides registry auto-pick")
     finally:
-        del os.environ["KWP_EDGEUP_CI_CAMPAIGN"]
+        del os.environ["KWP_EDGEUP_CAMPAIGN"]
 
 
 def test_route_by_topic():
@@ -72,11 +88,11 @@ def test_route_by_topic():
     ]
     out, stats = kr.route_by_topic(rows, reg=REG)
     ai = [r for r in out if r.keyword == "machine learning course"][0]
-    check(ai.campaign_name == "EdgeUp_CI_Comp_India" and ai.segment == "NB",
-          "AI keyword routed to EdgeUp CI campaign (+ aligned segment)")
+    check(ai.campaign_name == "IK-IN_Search_NB_EdgeUp_Generic_AI_35-54" and ai.segment == "NB",
+          "AI keyword routed to EdgeUp SEARCH campaign (+ aligned segment)")
     non = [r for r in out if r.keyword == "system design interview"][0]
-    check(non.campaign_name == "LevelUp_CI_DomainWise" and non.segment == "DS",
-          "non-AI keyword routed to LevelUp CI campaign")
+    check(non.campaign_name == "IK-IN_Search_NB_LevelUp_Generic_Allsale_HI_INDIA" and non.segment == "DS",
+          "non-AI keyword routed to LevelUp SEARCH campaign")
     neg = [r for r in out if r.kind == "negative"][0]
     check(neg.campaign_name == "orig_neg", "negative candidate left untouched by routing")
     check(stats == {"routed_ai_edgeup": 1, "routed_nonai_levelup": 1, "route_unresolved": 0},
