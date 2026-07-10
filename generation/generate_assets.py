@@ -68,6 +68,7 @@ import os
 import sys
 import time
 import uuid
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Callable, Optional
@@ -75,6 +76,8 @@ from typing import Callable, Optional
 import bq_writer
 import collect_kw_perf
 import config
+import keyword_planner
+import keyword_routing
 import lead_quality
 import llm
 import registry
@@ -107,6 +110,20 @@ MAX_DIGEST_ROWS = int(os.environ.get("CONDUCTOR_MAX_DIGEST_ROWS", "20"))
 # registry.check() downstream is warn-only, so a campaign omitted here is never
 # dropped from output -- it just isn't offered to the brain as a target.
 MAX_REGISTERED_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_REGISTERED_CAMPAIGNS", "80"))
+
+# Keyword Planner demand grounding (docs/keyword-planner-integration-plan.md).
+# Ships DARK: the whole enrich+expand block is skipped unless this is "true",
+# so with it off the keyword path is byte-identical to today.
+KEYWORD_PLANNER_ENABLED = os.environ.get("CONDUCTOR_ENABLE_KEYWORD_PLANNER", "false").lower() == "true"
+# Cap on Planner-only EXPANSION candidates added per segment, so a large idea
+# list can't flood the review queue (fetch itself is already capped upstream).
+KWP_MAX_EXPANSION_PER_SEGMENT = int(os.environ.get("KWP_MAX_EXPANSION_PER_SEGMENT", "15"))
+
+# Topic routing (AI -> EdgeUp CI campaign, non-AI -> LevelUp CI campaign) and the
+# already-running-keyword exclusion gate. Both ship DARK behind their own flags
+# (default off -> keyword path unchanged), same pattern as the Planner flag.
+TOPIC_ROUTING_ENABLED = os.environ.get("CONDUCTOR_ENABLE_TOPIC_ROUTING", "false").lower() == "true"
+RUNNING_KEYWORD_GATE_ENABLED = os.environ.get("CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE", "false").lower() == "true"
 
 _sanitize = collect_kw_perf._sanitize_error  # shared credential-fragment redaction
 
@@ -637,6 +654,121 @@ def _notes(degraded: list[str], drop_reasons: list[str], unregistered: dict) -> 
 
 
 # ---------------------------------------------------------------------------
+# Keyword Planner demand grounding (docs/keyword-planner-integration-plan.md)
+# ---------------------------------------------------------------------------
+# GenerateKeywordIdeas accepts at most 20 seed keywords per call; cap so a big
+# segment can't trip an API error.
+KWP_MAX_SEEDS = int(os.environ.get("KWP_MAX_SEEDS", "20"))
+
+
+def _catalog_seeds() -> list[str]:
+    """Optional static seeds (IK program-catalog terms) appended to every
+    segment's seed set. Env-driven, comma-separated; default none."""
+    raw = os.environ.get("KWP_CATALOG_SEEDS", "")
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def _modal_campaign(rows: list) -> str:
+    """Most common campaign_name among a segment's AI candidates -- the sensible
+    default target a Planner-only expansion term inherits (PMM can re-assign at
+    approval). `rows` is non-empty by construction (we only expand segments that
+    produced AI candidates)."""
+    return Counter(r.campaign_name for r in rows).most_common(1)[0][0]
+
+
+def enrich_and_expand_with_planner(ai_rows: list, run_date_: date, run_id: str
+                                   ) -> tuple[list, dict, list[str]]:
+    """Per-segment: seed Keyword Planner with the segment's AI candidate texts,
+    then (a) ENRICH each AI candidate with real volume/competition/bid and
+    (b) EXPAND with real-searched terms the AI missed. Zero/low-volume AI terms
+    are flagged (`no_planner_volume`), never dropped. Returns
+    (all_rows, stats, degraded). Fail-soft per segment: a Planner error leaves
+    that segment's AI rows unchanged and is recorded in `degraded`."""
+    catalog = _catalog_seeds()
+    by_segment: dict[str, list] = defaultdict(list)
+    for r in ai_rows:
+        by_segment[r.segment].append(r)
+
+    out_rows: list = []
+    degraded: list[str] = []
+    enriched = expanded = seg_ok = seg_fail = 0
+    floor = keyword_planner.KWP_LOW_VOLUME_FLOOR
+
+    for segment, seg_rows in by_segment.items():
+        # Seeds: this segment's candidate texts + catalog, de-duped, capped to 20.
+        seen: set[str] = set()
+        seeds: list[str] = []
+        for r in list(seg_rows) + [type("S", (), {"keyword": c})() for c in catalog]:
+            k = keyword_planner.normalize(r.keyword)
+            if k and k not in seen:
+                seen.add(k)
+                seeds.append(r.keyword)
+        seeds = seeds[:KWP_MAX_SEEDS]
+
+        ideas, reason = keyword_planner.fetch_ideas(seeds)
+        if reason:
+            degraded.append(f"keyword_planner[{segment}]: {reason}")
+            seg_fail += 1
+            out_rows.extend(seg_rows)          # unchanged; source stays unset (AI)
+            continue
+        seg_ok += 1
+
+        idea_by_key = {keyword_planner.normalize(i["text"]): i for i in ideas}
+        modal_campaign = _modal_campaign(seg_rows)
+        seg_keys: set[str] = set()
+
+        # (a) ENRICH the AI candidates.
+        for r in seg_rows:
+            key = keyword_planner.normalize(r.keyword)
+            seg_keys.add(key)
+            idea = idea_by_key.get(key)
+            if idea:
+                vol = idea["avg_monthly_searches"]
+                updates = {
+                    "keyword_source": "both",
+                    "avg_monthly_searches": vol,
+                    "competition": idea["competition"],
+                    "competition_index": idea["competition_index"],
+                    "top_of_page_bid_low_inr": idea["top_of_page_bid_low_inr"],
+                    "top_of_page_bid_high_inr": idea["top_of_page_bid_high_inr"],
+                    "demand_flag": "no_planner_volume" if vol <= floor else None,
+                }
+                enriched += 1
+            else:
+                # Planner returned no volume for this AI term -- keep it, flag it.
+                updates = {"keyword_source": "ai", "demand_flag": "no_planner_volume"}
+            out_rows.append(schemas.KeywordCandidateRow(**{**r.model_dump(), **updates}))
+
+        # (b) EXPAND with real-searched terms the AI missed (volume > floor only).
+        added = 0
+        for idea in ideas:                     # already sorted by volume desc
+            if added >= KWP_MAX_EXPANSION_PER_SEGMENT:
+                break
+            key = keyword_planner.normalize(idea["text"])
+            vol = idea["avg_monthly_searches"]
+            if key in seg_keys or vol <= floor:
+                continue
+            seg_keys.add(key)
+            out_rows.append(schemas.KeywordCandidateRow(
+                run_date=run_date_, run_id=run_id, campaign_name=modal_campaign,
+                segment=segment, keyword=idea["text"], match_type=None, kind="new",
+                relevance_verdict="borderline", relevance_score=0.5,
+                filter_reason="keyword_planner expansion (pending relevance gate)",
+                source_signal=f"keyword_planner: {vol}/mo searches (India)",
+                status="proposed", keyword_source="keyword_planner",
+                avg_monthly_searches=vol, competition=idea["competition"],
+                competition_index=idea["competition_index"],
+                top_of_page_bid_low_inr=idea["top_of_page_bid_low_inr"],
+                top_of_page_bid_high_inr=idea["top_of_page_bid_high_inr"]))
+            added += 1
+            expanded += 1
+
+    stats = {"enriched": enriched, "expansion_added": expanded,
+             "segments_processed": seg_ok, "segments_failed": seg_fail}
+    return out_rows, stats, degraded
+
+
+# ---------------------------------------------------------------------------
 # Path runners -- each returns (generation_runs row dicts, ok: bool). Writes
 # to ad_copy_drafts/audience_angles/the raw-keyword staging file happen
 # here; generation_runs itself is written ONCE at the end of main() across
@@ -665,6 +797,30 @@ def run_keyword_path(run_date_: date, run_id: str, from_fixture: Optional[str]) 
         return [row.model_dump()], False
 
     valid_rows, dropped, drop_reasons = gate_keyword_rows(raw)
+
+    # Keyword Planner demand grounding (dark unless CONDUCTOR_ENABLE_KEYWORD_PLANNER):
+    # enrich AI candidates with real volume + expand with real-searched terms.
+    kwp_stats = None
+    if KEYWORD_PLANNER_ENABLED and valid_rows:
+        valid_rows, kwp_stats, kwp_degraded = enrich_and_expand_with_planner(
+            valid_rows, run_date_, run_id)
+        degraded.extend(kwp_degraded)
+
+    # Topic routing (dark unless CONDUCTOR_ENABLE_TOPIC_ROUTING): AI keywords ->
+    # EdgeUp CI campaign, everything else -> LevelUp CI campaign.
+    route_stats = None
+    if TOPIC_ROUTING_ENABLED and valid_rows:
+        valid_rows, route_stats = keyword_routing.route_by_topic(valid_rows)
+
+    # Already-running-keyword gate (dark unless CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE):
+    # drop positive candidates we already bid on in the account.
+    running_excluded = None
+    if RUNNING_KEYWORD_GATE_ENABLED and valid_rows:
+        running, run_reason = keyword_planner.fetch_active_keywords()
+        if run_reason:
+            degraded.append(f"running_keyword_gate: {run_reason}")
+        valid_rows, _excluded, running_excluded = keyword_routing.exclude_running(valid_rows, running)
+
     staging_path = write_raw_keyword_staging(run_date_, run_id, valid_rows)
     log.info("keyword path: %d generated, %d dropped, %d written -> %s",
              len(raw) if isinstance(raw, list) else 0, dropped, len(valid_rows), staging_path)
@@ -675,12 +831,25 @@ def run_keyword_path(run_date_: date, run_id: str, from_fixture: Optional[str]) 
     if degraded or dropped or unregistered:
         status = "partial"
 
+    notes = _notes(degraded, drop_reasons, unregistered)
+    extra = []
+    if kwp_stats:
+        extra.append("keyword_planner: enriched=%(enriched)d expanded=%(expansion_added)d "
+                     "seg_ok=%(segments_processed)d seg_fail=%(segments_failed)d" % kwp_stats)
+    if route_stats:
+        extra.append("topic_routing: ai_edgeup=%(routed_ai_edgeup)d "
+                     "nonai_levelup=%(routed_nonai_levelup)d unresolved=%(route_unresolved)d" % route_stats)
+    if running_excluded is not None:
+        extra.append(f"already_active_excluded={running_excluded}")
+    if extra:
+        notes = ((notes + " || " + " || ".join(extra)) if notes else " || ".join(extra))[:1500]
+
     row = schemas.GenerationRunRow(
         run_date=run_date_, run_id=run_id, path="keyword",
         candidates_generated=len(raw) if isinstance(raw, list) else 0,
         passed_filter=len(valid_rows), borderline=borderline, rejected=dropped,
         llm_calls=llm_calls, duration_seconds=round(time.monotonic() - t0, 2),
-        status=status, notes=_notes(degraded, drop_reasons, unregistered),
+        status=status, notes=notes,
     )
     return [row.model_dump()], True
 

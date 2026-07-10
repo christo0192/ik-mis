@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { SectionHeading, EmptyState } from "@/components/ui/misc";
 import { UnavailableBanner } from "@/components/ui/unavailable-banner";
-import { Badge, statusVariant, verdictVariant } from "@/components/ui/badge";
+import { Badge, sourceLabel, sourceVariant, statusVariant, verdictVariant } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -122,6 +122,9 @@ export default async function GenerationPage({
                 <TableRow>
                   <TableHead>Campaign</TableHead>
                   <TableHead>Keyword</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead className="text-right">Vol/mo</TableHead>
+                  <TableHead>Competition</TableHead>
                   <TableHead>Kind</TableHead>
                   <TableHead>Verdict</TableHead>
                   <TableHead>Score</TableHead>
@@ -150,6 +153,27 @@ export default async function GenerationPage({
                       {k.match_type ? (
                         <span className="ml-1.5 text-[11px] text-muted">
                           ({k.match_type})
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={sourceVariant(k.keyword_source)}>
+                        {sourceLabel(k.keyword_source)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-right tabular-nums">
+                      {k.avg_monthly_searches !== null
+                        ? k.avg_monthly_searches.toLocaleString("en-IN")
+                        : "—"}
+                      {k.demand_flag === "no_planner_volume" ? (
+                        <span className="ml-1 text-[11px] text-muted">(low)</span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs text-muted">
+                      {k.competition ?? "—"}
+                      {k.top_of_page_bid_low_inr !== null && k.top_of_page_bid_high_inr !== null ? (
+                        <span className="ml-1">
+                          · ₹{k.top_of_page_bid_low_inr.toFixed(0)}–{k.top_of_page_bid_high_inr.toFixed(0)}
                         </span>
                       ) : null}
                     </TableCell>
