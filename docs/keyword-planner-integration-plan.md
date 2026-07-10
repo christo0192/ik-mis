@@ -80,6 +80,15 @@ Add Google Keyword Planner (`KeywordPlanIdeaService.GenerateKeywordIdeas`) to th
   - [ ] Flip the flag on in `fly.toml [env]` for the cron only after the manual run is clean.
   - Done when: one unattended scheduled run completes end-to-end with Planner enabled, real volumes in the queue, and no new failure mode vs. the AI-only baseline.
 
+## Follow-up changes (2026-07-10) — topic routing + already-running gate
+
+Two PMM-requested additions on the same branch, each **dark behind its own flag**:
+
+- **Topic routing** (`CONDUCTOR_ENABLE_TOPIC_ROUTING`) — `keyword_routing.route_by_topic`: **AI-topic** keywords (ML/deep-learning + GenAI/LLM/agentic; NLP/CV/data-science deliberately excluded) route to the **EdgeUp** program's Coding-Interview search campaign; everything else → **LevelUp**'s. Campaign auto-resolved from `campaign_registry` (program + `CI` name token, Google platform), **env-pinnable** per program (`KWP_EDGEUP_CI_CAMPAIGN` / `KWP_LEVELUP_CI_CAMPAIGN`) after you verify the auto-picks. campaign_name + segment set together for registry consistency. Applies to all positive candidates (AI-generated + Planner expansion); negatives untouched.
+- **Already-running gate** (`CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE`) — `keyword_routing.exclude_running` over `keyword_planner.fetch_active_keywords` (live `keyword_view`, ENABLED only): positive candidates we already bid on are excluded (count logged to `generation_runs.notes`). **Not** written to `keyword_rejects` — an already-running keyword must never become a negative. Fail-soft: if the pull errors, nothing is excluded (safe degradation).
+
+New tests: `tests_keyword_routing.py` (AI classifier, campaign resolution + env pin, routing, exclusion, fail-soft) — all green; flag-off parity preserved.
+
 ## Rollback Plan
 
 - **What to revert:** `CONDUCTOR_ENABLE_KEYWORD_PLANNER=false` (instant kill — reverts to today's AI-only path); the `keyword_planner.py` module; the conductor merge block; the dashboard columns.

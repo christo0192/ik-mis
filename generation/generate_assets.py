@@ -77,6 +77,7 @@ import bq_writer
 import collect_kw_perf
 import config
 import keyword_planner
+import keyword_routing
 import lead_quality
 import llm
 import registry
@@ -117,6 +118,12 @@ KEYWORD_PLANNER_ENABLED = os.environ.get("CONDUCTOR_ENABLE_KEYWORD_PLANNER", "fa
 # Cap on Planner-only EXPANSION candidates added per segment, so a large idea
 # list can't flood the review queue (fetch itself is already capped upstream).
 KWP_MAX_EXPANSION_PER_SEGMENT = int(os.environ.get("KWP_MAX_EXPANSION_PER_SEGMENT", "15"))
+
+# Topic routing (AI -> EdgeUp CI campaign, non-AI -> LevelUp CI campaign) and the
+# already-running-keyword exclusion gate. Both ship DARK behind their own flags
+# (default off -> keyword path unchanged), same pattern as the Planner flag.
+TOPIC_ROUTING_ENABLED = os.environ.get("CONDUCTOR_ENABLE_TOPIC_ROUTING", "false").lower() == "true"
+RUNNING_KEYWORD_GATE_ENABLED = os.environ.get("CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE", "false").lower() == "true"
 
 _sanitize = collect_kw_perf._sanitize_error  # shared credential-fragment redaction
 
@@ -799,6 +806,21 @@ def run_keyword_path(run_date_: date, run_id: str, from_fixture: Optional[str]) 
             valid_rows, run_date_, run_id)
         degraded.extend(kwp_degraded)
 
+    # Topic routing (dark unless CONDUCTOR_ENABLE_TOPIC_ROUTING): AI keywords ->
+    # EdgeUp CI campaign, everything else -> LevelUp CI campaign.
+    route_stats = None
+    if TOPIC_ROUTING_ENABLED and valid_rows:
+        valid_rows, route_stats = keyword_routing.route_by_topic(valid_rows)
+
+    # Already-running-keyword gate (dark unless CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE):
+    # drop positive candidates we already bid on in the account.
+    running_excluded = None
+    if RUNNING_KEYWORD_GATE_ENABLED and valid_rows:
+        running, run_reason = keyword_planner.fetch_active_keywords()
+        if run_reason:
+            degraded.append(f"running_keyword_gate: {run_reason}")
+        valid_rows, _excluded, running_excluded = keyword_routing.exclude_running(valid_rows, running)
+
     staging_path = write_raw_keyword_staging(run_date_, run_id, valid_rows)
     log.info("keyword path: %d generated, %d dropped, %d written -> %s",
              len(raw) if isinstance(raw, list) else 0, dropped, len(valid_rows), staging_path)
@@ -810,10 +832,17 @@ def run_keyword_path(run_date_: date, run_id: str, from_fixture: Optional[str]) 
         status = "partial"
 
     notes = _notes(degraded, drop_reasons, unregistered)
+    extra = []
     if kwp_stats:
-        kwp_note = ("keyword_planner: enriched=%(enriched)d expanded=%(expansion_added)d "
-                    "seg_ok=%(segments_processed)d seg_fail=%(segments_failed)d" % kwp_stats)
-        notes = ((notes + " || " + kwp_note) if notes else kwp_note)[:1500]
+        extra.append("keyword_planner: enriched=%(enriched)d expanded=%(expansion_added)d "
+                     "seg_ok=%(segments_processed)d seg_fail=%(segments_failed)d" % kwp_stats)
+    if route_stats:
+        extra.append("topic_routing: ai_edgeup=%(routed_ai_edgeup)d "
+                     "nonai_levelup=%(routed_nonai_levelup)d unresolved=%(route_unresolved)d" % route_stats)
+    if running_excluded is not None:
+        extra.append(f"already_active_excluded={running_excluded}")
+    if extra:
+        notes = ((notes + " || " + " || ".join(extra)) if notes else " || ".join(extra))[:1500]
 
     row = schemas.GenerationRunRow(
         run_date=run_date_, run_id=run_id, path="keyword",

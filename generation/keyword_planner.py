@@ -132,6 +132,38 @@ def fetch_ideas(seeds: list[str], *, geo: Optional[str] = None,
     return ideas, None
 
 
+def _fetch_active_keywords_raw() -> list[str]:
+    """Live pull of the account's ENABLED positive keyword texts via
+    `keyword_view`. Isolated (like `_generate_keyword_ideas_raw`) so tests
+    monkeypatch it and never touch the API."""
+    client, customer_id = collect_kw_perf._client_and_customer_id()
+    ga = client.get_service("GoogleAdsService")
+    query = (
+        "SELECT ad_group_criterion.keyword.text "
+        "FROM keyword_view "
+        "WHERE ad_group_criterion.status = 'ENABLED' "
+        "AND campaign.status = 'ENABLED' AND ad_group.status = 'ENABLED'"
+    )
+    return [row.ad_group_criterion.keyword.text for row in ga.search(
+        customer_id=customer_id, query=query)]
+
+
+def fetch_active_keywords() -> tuple[set, Optional[str]]:
+    """Normalized set of the account's currently-running (ENABLED) keywords,
+    for the already-running exclusion gate. Fail-soft: on error returns
+    (empty set, reason) so the gate simply excludes nothing (safe degradation --
+    never drops candidates because the pull failed) and never raises."""
+    try:
+        texts = _fetch_active_keywords_raw()
+    except Exception as e:
+        reason = f"active-keyword fetch failed: {_sanitize(str(e))[:280]}"
+        log.warning(reason)
+        return set(), reason
+    active = {normalize(t) for t in texts if t}
+    log.info("keyword_planner: %d active account keywords loaded (exclusion gate)", len(active))
+    return active, None
+
+
 def _cli(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     p = argparse.ArgumentParser(description="Keyword Planner idea fetch (throwaway/manual check).")
