@@ -207,7 +207,7 @@ export default async function GenerationPage({
                 <TableRow>
                   <TableHead>Campaign</TableHead>
                   <TableHead>Asset</TableHead>
-                  <TableHead>Headline</TableHead>
+                  <TableHead>Headline / InMail</TableHead>
                   <TableHead>Description / CTA</TableHead>
                   <TableHead>Source Signal</TableHead>
                   <TableHead>Status</TableHead>
@@ -236,8 +236,22 @@ export default async function GenerationPage({
                         {d.asset_id}
                       </Link>
                     </TableCell>
-                    <TableCell className="max-w-64 font-medium text-foreground">
-                      {d.headline}
+                    <TableCell className="max-w-96 font-medium text-foreground">
+                      {d.linkedin_format ? (
+                        <div className="space-y-1">
+                          <Badge variant="outline">
+                            {d.linkedin_format === "conversation" ? "Conversation Ad" : "InMail"}
+                          </Badge>
+                          {d.subject ? (
+                            <div className="text-xs font-semibold">Subject: {d.subject}</div>
+                          ) : null}
+                          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-muted/40 p-2 text-[11px] font-normal text-muted">
+                            {d.body}
+                          </pre>
+                        </div>
+                      ) : (
+                        (d.headline ?? "—")
+                      )}
                     </TableCell>
                     <TableCell className="max-w-64 text-xs text-muted">
                       {d.description ?? "—"}

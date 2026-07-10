@@ -117,7 +117,7 @@ export interface AdCopyDraftRow {
   segment: string | null;
   platform: string | null;
   asset_id: string;
-  headline: string;
+  headline: string | null;
   primary_text: string | null;
   description: string | null;
   cta: string | null;
@@ -126,6 +126,10 @@ export interface AdCopyDraftRow {
   reviewed_by: string | null;
   reviewed_at: string | null;
   edit_distance: number | null;
+  // LinkedIn InMail / Conversation ads (null on google + legacy Sponsored Content).
+  linkedin_format: string | null;
+  subject: string | null;
+  body: string | null;
 }
 
 export interface AudienceAngleRow {
@@ -243,7 +247,7 @@ function mapAdCopyDraft(r: Record<string, unknown>): AdCopyDraftRow {
     segment: str(r.segment),
     platform: str(r.platform),
     asset_id: String(r.asset_id ?? ""),
-    headline: String(r.headline ?? ""),
+    headline: str(r.headline),
     primary_text: str(r.primary_text),
     description: str(r.description),
     cta: str(r.cta),
@@ -252,6 +256,9 @@ function mapAdCopyDraft(r: Record<string, unknown>): AdCopyDraftRow {
     reviewed_by: str(r.reviewed_by),
     reviewed_at: dateStr(r.reviewed_at),
     edit_distance: num(r.edit_distance),
+    linkedin_format: str(r.linkedin_format),
+    subject: str(r.subject),
+    body: str(r.body),
   };
 }
 
@@ -418,7 +425,8 @@ export async function getAdCopyDrafts(
   const result = await safeQuery<Record<string, unknown>>(
     `SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
             headline, primary_text, description, cta, source_signal,
-            status, reviewed_by, reviewed_at, edit_distance
+            status, reviewed_by, reviewed_at, edit_distance,
+            linkedin_format, subject, body
        FROM \`${CE_TABLES.adCopyDrafts}\`
       WHERE ${clauses.join(" AND ")}
       ORDER BY asset_id`,
