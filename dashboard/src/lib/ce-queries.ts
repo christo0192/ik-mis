@@ -96,6 +96,14 @@ export interface KeywordCandidateRow {
   status: string | null;
   reviewed_by: string | null;
   reviewed_at: string | null;
+  // Keyword Planner demand grounding (null unless the Planner path ran).
+  keyword_source: string | null;
+  avg_monthly_searches: number | null;
+  competition: string | null;
+  competition_index: number | null;
+  top_of_page_bid_low_inr: number | null;
+  top_of_page_bid_high_inr: number | null;
+  demand_flag: string | null;
 }
 
 export interface KeywordRejectRow {
@@ -222,6 +230,13 @@ function mapKeywordCandidate(r: Record<string, unknown>): KeywordCandidateRow {
     status: str(r.status),
     reviewed_by: str(r.reviewed_by),
     reviewed_at: dateStr(r.reviewed_at),
+    keyword_source: str(r.keyword_source),
+    avg_monthly_searches: num(r.avg_monthly_searches),
+    competition: str(r.competition),
+    competition_index: num(r.competition_index),
+    top_of_page_bid_low_inr: num(r.top_of_page_bid_low_inr),
+    top_of_page_bid_high_inr: num(r.top_of_page_bid_high_inr),
+    demand_flag: str(r.demand_flag),
   };
 }
 
@@ -388,10 +403,12 @@ export async function getKeywordCandidates(
   const result = await safeQuery<Record<string, unknown>>(
     `SELECT run_date, run_id, campaign_name, segment, keyword, match_type, kind,
             relevance_verdict, relevance_score, filter_reason, source_signal,
-            status, reviewed_by, reviewed_at
+            status, reviewed_by, reviewed_at,
+            keyword_source, avg_monthly_searches, competition, competition_index,
+            top_of_page_bid_low_inr, top_of_page_bid_high_inr, demand_flag
        FROM \`${CE_TABLES.keywordCandidates}\`
       WHERE ${clauses.join(" AND ")}
-      ORDER BY relevance_score DESC NULLS LAST, keyword`,
+      ORDER BY avg_monthly_searches DESC NULLS LAST, relevance_score DESC NULLS LAST, keyword`,
     params,
   );
   return { rows: result.rows.map(mapKeywordCandidate), error: result.error };
