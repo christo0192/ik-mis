@@ -108,7 +108,37 @@ MAX_DIGEST_ROWS = int(os.environ.get("CONDUCTOR_MAX_DIGEST_ROWS", "20"))
 # dropped from output -- it just isn't offered to the brain as a target.
 MAX_REGISTERED_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_REGISTERED_CAMPAIGNS", "80"))
 
+# LinkedIn InMail / Conversation ad copy (docs/linkedin-inmail-copy-plan.md).
+# Ships DARK: with the flag off the copy brain emits legacy Sponsored Content
+# for LinkedIn (copy prompt byte-identical to today). With it on, the two
+# verbatim template files are injected into the copy prompt and the brain
+# produces InMail + Conversation ads matching them exactly.
+LINKEDIN_INMAIL_ENABLED = os.environ.get("CONDUCTOR_ENABLE_LINKEDIN_INMAIL", "false").lower() == "true"
+LINKEDIN_TEMPLATE_DIR = BRAINS_DIR / "linkedin_templates"
+
 _sanitize = collect_kw_perf._sanitize_error  # shared credential-fragment redaction
+
+
+def _linkedin_template_block() -> str:
+    """The two verbatim LinkedIn creative templates wrapped as a MUST-follow
+    section appended to the copy prompt when LINKEDIN_INMAIL_ENABLED is on.
+    Returns "" when the flag is off or the files are missing (fail-soft, so the
+    prompt stays byte-identical to today's Sponsored Content path)."""
+    if not LINKEDIN_INMAIL_ENABLED:
+        return ""
+    parts = []
+    for label, fname in (("Message / InMail ad", "message_ads_examples.md"),
+                         ("Conversation ad (branching flow)", "conversation_ads_examples.md")):
+        path = LINKEDIN_TEMPLATE_DIR / fname
+        if path.exists():
+            parts.append(f"### {label} -- reproduce this structure EXACTLY\n\n"
+                         f"{path.read_text(encoding='utf-8')}")
+    if not parts:
+        return ""
+    return ("\n\n## LinkedIn creative templates (FOLLOW EXACTLY -- fill only "
+            "placeholders such as [First Name]/[Job Title]/program/trivia/offer; "
+            "never change the structure, wording pattern, steps, or formatting)\n\n"
+            + "\n\n---\n\n".join(parts))
 
 
 def _short_err(e: Exception) -> str:
@@ -545,18 +575,23 @@ def gate_keyword_rows(raw_items) -> tuple[list, int, list[str]]:
 
 
 def _copy_length_violation(row: "schemas.AdCopyDraftRow") -> Optional[str]:
-    """The RSA/LinkedIn character-limit re-check schemas.py does NOT enforce
-    -- 'the brain promises, the conductor verifies' (PLAN.md)."""
+    """Google RSA character-limit re-check the schema does NOT enforce -- 'the
+    brain promises, the conductor verifies' (PLAN.md). LinkedIn InMail /
+    Conversation ads have no such short-copy limits (they carry long
+    `subject`/`body` content), so they are not length-checked here."""
     if row.platform == "google":
+        headline = row.headline or ""
         if row.description is None:
-            if len(row.headline) > 30:
-                return f"google headline row {row.asset_id!r} is {len(row.headline)} chars (>30)"
+            if len(headline) > 30:
+                return f"google headline row {row.asset_id!r} is {len(headline)} chars (>30)"
         elif len(row.description) > 90:
             return f"google description row {row.asset_id!r} is {len(row.description)} chars (>90)"
-    elif row.platform == "linkedin":
+    elif row.platform == "linkedin" and row.linkedin_format is None:
+        # Legacy Sponsored Content limits (InMail/Conversation rows, which set
+        # linkedin_format and carry long subject/body content, are not capped).
         if row.primary_text and len(row.primary_text) > 200:
             return f"linkedin primary_text row {row.asset_id!r} is {len(row.primary_text)} chars (>200)"
-        if len(row.headline) > 70:
+        if row.headline and len(row.headline) > 70:
             return f"linkedin headline row {row.asset_id!r} is {len(row.headline)} chars (>70)"
     return None
 
@@ -689,7 +724,7 @@ def run_copy_path(run_date_: date, run_id: str, from_fixture: Optional[str]) -> 
     t0 = time.monotonic()
     registry.reset_unregistered_report()
     digest, degraded = build_copy_digest(run_date_, run_id, from_fixture)
-    brain_text = COPY_BRAIN_FILE.read_text(encoding="utf-8")
+    brain_text = COPY_BRAIN_FILE.read_text(encoding="utf-8") + _linkedin_template_block()
     prompt = assemble_prompt(brain_text, digest)
 
     try:

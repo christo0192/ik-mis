@@ -113,16 +113,33 @@ One RSA asset set per targeted campaign, emitted as individual rows:
 
 ### LinkedIn (`platform: "linkedin"`)
 
-Per targeted LinkedIn campaign, emit 2-4 copy rows:
+LinkedIn copy has two modes. **Which one you produce depends on whether a
+`## LinkedIn creative templates` section is provided later in this prompt:**
 
-- `primary_text` = intro text, **≤150 characters ideal** (hard-stop 200; the
-  150 limit avoids "see more" truncation) -- this is the main sponsored-content
-  intro.
-- `headline` = the headline below the creative, **≤70 characters**.
-- `description` = optional supporting line ≤100 chars or null.
-- `cta` = one of LinkedIn's CTA button values that matches the offer
-  ("Register", "Learn More", "Download", "Sign Up").
-- `asset_id` = `{campaign-slug}_li01`, `_li02`, ...
+**Mode A — InMail / Conversation ads (produce this whenever the templates
+section IS present).** Follow the provided templates EXACTLY: fill only the
+placeholders (`[First Name]`, `[Job Title]`, program name, trivia stat,
+offer/CTA), and never change the structure, wording pattern, step branching,
+bullets, or signature. Per targeted LinkedIn campaign emit:
+
+- 1-2 **message** rows (`linkedin_format: "message"`): `subject` = the InMail
+  subject line; `body` = the full message (greeting, paragraphs, `•` bullets,
+  CTA line, `Best, [Your Name]` sign-off) exactly in the message-template
+  shape; `cta` = the button label. `headline` / `primary_text` / `description`
+  = null.
+- 1 **conversation** row (`linkedin_format: "conversation"`): `body` = the
+  ENTIRE branching flow (`Step 1` → Yes/No options → `Step 2/3/4` branches) as
+  one markdown block, exactly in the conversation-template shape; `subject` =
+  null; `cta` = the primary button label. `headline` / `primary_text` /
+  `description` = null.
+- `asset_id` = `{campaign-slug}_li_msg01` / `{campaign-slug}_li_convo01`.
+
+**Mode B — Sponsored Content (produce this only when NO templates section is
+present).** Per campaign emit 2-4 rows: `primary_text` = intro **≤150 chars**
+(hard-stop 200), `headline` **≤70 chars**, `description` optional ≤100 chars or
+null, `cta` = a LinkedIn button value ("Register", "Learn More", "Download",
+"Sign Up"). `linkedin_format` / `subject` / `body` = null. `asset_id` =
+`{campaign-slug}_li01`, `_li02`, ...
 
 ### Audience angles (both platforms)
 
@@ -203,10 +220,13 @@ for every field known at generation time:
       "segment": "NB | Discovery | Brand | LinkedIn",
       "platform": "google | linkedin",
       "asset_id": "string -- see Row typing convention",
-      "headline": "string (google headline rows: the ≤30-char asset; google description rows: the asset_id; linkedin: the ≤70-char headline)",
-      "primary_text": "string or null (linkedin intro ≤150 chars; null on google rows)",
-      "description": "string or null (google description rows: the ≤90-char asset; linkedin: optional ≤100 chars)",
+      "headline": "string or null (google headline rows: the ≤30-char asset; google description rows: the asset_id; linkedin Sponsored Content: the ≤70-char headline; null on linkedin InMail/Conversation rows)",
+      "primary_text": "string or null (linkedin Sponsored Content intro ≤150 chars; null on google + linkedin InMail/Conversation rows)",
+      "description": "string or null (google description rows: the ≤90-char asset; linkedin Sponsored Content: optional ≤100 chars; null on InMail/Conversation rows)",
       "cta": "string or null",
+      "linkedin_format": "message | conversation | null (set on linkedin InMail/Conversation rows only; null on google + legacy Sponsored Content)",
+      "subject": "string or null (linkedin message rows: the InMail subject line; null otherwise)",
+      "body": "string or null (linkedin message rows: the full message; linkedin conversation rows: the entire branching flow markdown; null on google + Sponsored Content)",
       "source_signal": "string -- see Grounding rule",
       "status": "proposed"
     }

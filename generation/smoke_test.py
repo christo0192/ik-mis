@@ -222,6 +222,38 @@ def main():
     except ValidationError as e:
         check(True, f"row with an extra/typo'd field raises ValidationError ({len(e.errors())} error(s))")
 
+    # (f) LinkedIn InMail / Conversation ad rows: platform-conditional validation
+    # (docs/linkedin-inmail-copy-plan.md). Message needs subject+body; conversation
+    # needs body; neither needs a headline. A message row missing subject fails.
+    li_common = {"run_date": RUN_DATE, "run_id": RUN_ID,
+                 "campaign_name": "IK-IN_LinkedIn_EdgeUp_Conversation_EM_JF",
+                 "segment": "LinkedIn", "platform": "linkedin",
+                 "source_signal": "pmis_recommendations: EM segment InMail angle", "status": "proposed"}
+    li_message = {**li_common, "asset_id": "acd-li-msg-1", "linkedin_format": "message",
+                  "subject": "Your team is upleveling in Agentic AI. Are you ready to lead them?",
+                  "body": "Hi [Name],\n\nAcross India, tech teams are rapidly experimenting with LLMs...\n"
+                          "• 60+ live hours with MAANG+ & PwC experts\n[Join our webinar →]\nBest,\n[Your Name]",
+                  "cta": "Register"}
+    li_convo = {**li_common, "asset_id": "acd-li-convo-1", "linkedin_format": "conversation",
+                "body": "Step 1 (Initial):\nHi [First Name], I noticed you explored Interview Kickstart...\n"
+                        "* Yes, tell me more\n* No, I don't want to upskill right now\n\nStep 2 (if Yes): ...",
+                "cta": "Learn More"}
+    for name, row in (("message", li_message), ("conversation", li_convo)):
+        written = bq_writer.write_rows("ad_copy_drafts", [row])
+        check(written == 0, f"linkedin {name} ad_copy row: DRY_RUN write returns 0")
+        prev = json.loads((config.STAGING_DIR / "bq_preview_ad_copy_drafts.json").read_text(encoding="utf-8"))
+        r0 = prev["rows"][0]
+        check(r0.get("linkedin_format") == row["linkedin_format"] and r0.get("body") == row["body"]
+              and r0.get("headline") is None,
+              f"linkedin {name} round-trips (format+body preserved, headline null)")
+    bad_message = dict(li_message)
+    bad_message["subject"] = ""      # message ad must have a subject
+    try:
+        bq_writer.write_rows("ad_copy_drafts", [bad_message])
+        check(False, "linkedin message row missing subject raises ValidationError")
+    except ValidationError as e:
+        check(True, f"linkedin message row missing subject raises ValidationError ({len(e.errors())} error(s))")
+
     print("\nAll smoke-test assertions passed.")
 
 
