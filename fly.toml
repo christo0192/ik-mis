@@ -44,3 +44,12 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # registered-campaigns digest (CONDUCTOR_MAX_REGISTERED_CAMPAIGNS, default 80)
   # that shrinks the prompt itself.
   GENERATION_LLM_TIMEOUT_S = "900"
+  # Keyword Planner demand grounding + topic routing + already-running gate
+  # (docs/keyword-planner-integration-plan.md). Enabled 2026-07-10 after a live
+  # manual verify run confirmed correct enrichment/routing/exclusion on the real
+  # account. Auto-pick routes AI keywords -> IK-IN_Search_NB_EdgeUp_Generic_AI_35-54,
+  # non-AI -> IK-IN_Search_NB_LevelUp_Generic_Allsale_HI_INDIA (env-pinnable via
+  # KWP_EDGEUP_CAMPAIGN / KWP_LEVELUP_CAMPAIGN).
+  CONDUCTOR_ENABLE_KEYWORD_PLANNER = "true"
+  CONDUCTOR_ENABLE_TOPIC_ROUTING = "true"
+  CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE = "true"
