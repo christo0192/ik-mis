@@ -23,7 +23,7 @@ cite the source signal."
 from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Optional, Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class _Row(BaseModel):
@@ -178,7 +178,7 @@ class AdCopyDraftRow(_Row):
     segment: str
     platform: Literal["google", "linkedin", "meta"]
     asset_id: str
-    headline: str
+    headline: Optional[str] = None                         # required for google; unused on linkedin
     primary_text: Optional[str] = None
     description: Optional[str] = None
     cta: Optional[str] = None
@@ -187,22 +187,52 @@ class AdCopyDraftRow(_Row):
     reviewed_by: Optional[str] = None
     reviewed_at: Optional[datetime] = None
     edit_distance: Optional[int] = Field(default=None, ge=0)
+    # --- LinkedIn InMail / Conversation ads (docs/linkedin-inmail-copy-plan.md).
+    # linkedin_format selects the creative type; `subject` is the InMail subject
+    # line (message ads only); `body` holds the full message OR the entire
+    # branching conversation flow as markdown (no length cap -- see the removed
+    # LinkedIn check in generate_assets._copy_length_violation). NULL on google.
+    linkedin_format: Optional[Literal["message", "conversation"]] = None
+    subject: Optional[str] = None
+    body: Optional[str] = None
 
-    @field_validator("headline", "asset_id", "source_signal")
+    @field_validator("asset_id", "source_signal")
     @classmethod
     def _required_str(cls, v, info):
         return _non_empty(v, info.field_name)
+
+    @model_validator(mode="after")
+    def _platform_requirements(self):
+        """Platform-conditional required fields. Google RSA rows need a headline.
+        LinkedIn rows come in two shapes, so both stay valid (the InMail feature
+        ships dark -- with its flag off the brain still emits legacy Sponsored
+        Content rows): a legacy Sponsored Content row (no `linkedin_format`)
+        needs a headline exactly as before; an InMail/Conversation row
+        (`linkedin_format` set) needs a `body` instead (+ a `subject` for message
+        ads) and carries no headline."""
+        if self.platform == "google":
+            _non_empty(self.headline or "", "headline")
+        elif self.platform == "linkedin":
+            if self.linkedin_format is None:
+                _non_empty(self.headline or "", "headline")   # legacy Sponsored Content
+            else:
+                _non_empty(self.body or "", "body")
+                if self.linkedin_format == "message":
+                    _non_empty(self.subject or "", "subject")
+        return self
 
 
 AD_COPY_DRAFTS_BQ = [
     ("run_date", "DATE", "REQUIRED"), ("run_id", "STRING", "REQUIRED"),
     ("campaign_name", "STRING", "REQUIRED"), ("segment", "STRING", "REQUIRED"),
     ("platform", "STRING", "REQUIRED"), ("asset_id", "STRING", "REQUIRED"),
-    ("headline", "STRING", "REQUIRED"), ("primary_text", "STRING", "NULLABLE"),
+    ("headline", "STRING", "NULLABLE"), ("primary_text", "STRING", "NULLABLE"),
     ("description", "STRING", "NULLABLE"), ("cta", "STRING", "NULLABLE"),
     ("source_signal", "STRING", "REQUIRED"), ("status", "STRING", "NULLABLE"),
     ("reviewed_by", "STRING", "NULLABLE"), ("reviewed_at", "TIMESTAMP", "NULLABLE"),
     ("edit_distance", "INTEGER", "NULLABLE"),
+    ("linkedin_format", "STRING", "NULLABLE"), ("subject", "STRING", "NULLABLE"),
+    ("body", "STRING", "NULLABLE"),
 ]
 
 

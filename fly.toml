@@ -53,3 +53,8 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   CONDUCTOR_ENABLE_KEYWORD_PLANNER = "true"
   CONDUCTOR_ENABLE_TOPIC_ROUTING = "true"
   CONDUCTOR_ENABLE_RUNNING_KEYWORD_GATE = "true"
+  # LinkedIn InMail / Conversation ad copy (docs/linkedin-inmail-copy-plan.md).
+  # Enabled 2026-07-10 after a flag-on dry-run confirmed the generated copy
+  # reproduces the stored templates faithfully. With it off the copy path emits
+  # legacy Sponsored Content for LinkedIn.
+  CONDUCTOR_ENABLE_LINKEDIN_INMAIL = "true"
