@@ -43,7 +43,12 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # headroom; tunable here without a code change. Paired with a cap on the
   # registered-campaigns digest (CONDUCTOR_MAX_REGISTERED_CAMPAIGNS, default 80)
   # that shrinks the prompt itself.
-  GENERATION_LLM_TIMEOUT_S = "900"
+  # 1200s (was 900): the copy path hit 751s on 2026-07-11 -- 83% of the 900s
+  # ceiling -- once LinkedIn InMail/Conversation copy (long bodies) was enabled.
+  # Headroom so a heavier LinkedIn day doesn't tip the single copy synth over
+  # and fail the day's copy generation. Proper follow-up: cap the copy output
+  # (fewer campaigns/rows per run) rather than just raising the ceiling.
+  GENERATION_LLM_TIMEOUT_S = "1200"
   # Keyword Planner demand grounding + topic routing + already-running gate
   # (docs/keyword-planner-integration-plan.md). Enabled 2026-07-10 after a live
   # manual verify run confirmed correct enrichment/routing/exclusion on the real
