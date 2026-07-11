@@ -68,16 +68,19 @@ run_step() {
 # --- 1. collect_kw_perf -- yesterday's search-term/keyword performance feed.
 run_step "collect_kw_perf" "$PYTHON" "$GENDIR/collect_kw_perf.py"
 
-# --- 2. lead_quality (CPQL signal) -- weekly cadence, Mondays only (IST),
-#     unless forced. `date +%u`: 1=Monday .. 7=Sunday. Uses TZ=Asia/Kolkata
-#     explicitly rather than relying on container-local TZ, so this guard
-#     is correct whether run inside the Fly image (TZ=Asia/Kolkata already
-#     set) or from a plain local shell in any other TZ.
+# --- 2. lead_quality (CPQL signal). Runs DAILY by default: its source
+#     (pmis_daily_segment_facts) refreshes daily, the job is cheap (a couple of
+#     BQ reads over a 30-day window, no LLM), and CPQL feeds EVERY daily
+#     generation run -- the old Monday-only cadence left the signal up to 6 days
+#     stale (2026-07-11 hygiene finding). Set LEAD_QUALITY_WEEKLY=true to restore
+#     the Mondays-IST-only cadence; FORCE_LEAD_QUALITY=true always runs it.
+#     `date +%u`: 1=Monday .. 7=Sunday, via TZ=Asia/Kolkata (correct in the Fly
+#     image and from any local shell).
 IST_WEEKDAY="$(TZ='Asia/Kolkata' date +%u)"
-if [ "$IST_WEEKDAY" = "1" ] || [ "$FORCE_LEAD_QUALITY" = "true" ]; then
+if [ "$LEAD_QUALITY_WEEKLY" != "true" ] || [ "$IST_WEEKDAY" = "1" ] || [ "$FORCE_LEAD_QUALITY" = "true" ]; then
   run_step "lead_quality" "$PYTHON" "$GENDIR/lead_quality.py"
 else
-  log "[lead_quality] SKIPPED -- not Monday IST (weekday=$IST_WEEKDAY); pass --force or set FORCE_LEAD_QUALITY=true to override"
+  log "[lead_quality] SKIPPED -- LEAD_QUALITY_WEEKLY=true and not Monday IST (weekday=$IST_WEEKDAY); FORCE_LEAD_QUALITY=true overrides"
 fi
 
 # --- 3. generate_assets -- keyword + copy/angle candidate generation (the
