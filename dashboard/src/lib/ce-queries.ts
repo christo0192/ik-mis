@@ -496,7 +496,8 @@ export async function getAdCopyDraftByAssetId(
   const result = await safeQuery<Record<string, unknown>>(
     `SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
             headline, primary_text, description, cta, source_signal,
-            status, reviewed_by, reviewed_at, edit_distance
+            status, reviewed_by, reviewed_at, edit_distance,
+            linkedin_format, subject, body
        FROM \`${CE_TABLES.adCopyDrafts}\`
       WHERE asset_id = @assetId
       ORDER BY run_date DESC
