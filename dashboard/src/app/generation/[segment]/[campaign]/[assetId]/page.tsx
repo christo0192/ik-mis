@@ -79,14 +79,40 @@ export default async function AssetDetailPage({
               <p className="text-xs font-medium uppercase tracking-wide text-muted">Ad Copy Draft</p>
               <Badge variant={statusVariant(draft.status)}>{draft.status ?? "—"}</Badge>
             </div>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Headline" value={draft.headline} />
-              <Field label="CTA" value={draft.cta ?? "—"} />
-              <Field label="Primary text" value={draft.primary_text ?? "—"} />
-              <Field label="Description" value={draft.description ?? "—"} />
-              <Field label="Platform" value={draft.platform ?? "—"} />
-              <Field label="Edit distance" value={draft.edit_distance ?? "—"} />
-            </div>
+            {draft.linkedin_format ? (
+              <>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field
+                    label="Format"
+                    value={
+                      <Badge variant="outline">
+                        {draft.linkedin_format === "conversation" ? "Conversation Ad" : "InMail"}
+                      </Badge>
+                    }
+                  />
+                  <Field label="CTA" value={draft.cta ?? "—"} />
+                  <Field label="Platform" value={draft.platform ?? "—"} />
+                  {draft.subject ? <Field label="Subject" value={draft.subject} /> : null}
+                </div>
+                <Field
+                  label="Body"
+                  value={
+                    <pre className="max-h-[32rem] overflow-auto whitespace-pre-wrap rounded-lg bg-white/[0.03] px-3 py-2 text-xs leading-relaxed text-foreground/90">
+                      {draft.body ?? "—"}
+                    </pre>
+                  }
+                />
+              </>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <Field label="Headline" value={draft.headline ?? "—"} />
+                <Field label="CTA" value={draft.cta ?? "—"} />
+                <Field label="Primary text" value={draft.primary_text ?? "—"} />
+                <Field label="Description" value={draft.description ?? "—"} />
+                <Field label="Platform" value={draft.platform ?? "—"} />
+                <Field label="Edit distance" value={draft.edit_distance ?? "—"} />
+              </div>
+            )}
             <Field
               label="Grounding signal (source_signal)"
               value={

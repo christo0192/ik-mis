@@ -184,7 +184,20 @@ export default async function CampaignDetailPage({
                         {d.asset_id}
                       </Link>
                     </TableCell>
-                    <TableCell className="max-w-64 font-medium text-foreground">{d.headline}</TableCell>
+                    <TableCell className="max-w-64 font-medium text-foreground">
+                      {d.linkedin_format ? (
+                        <span className="flex flex-col gap-1">
+                          <Badge variant="outline">
+                            {d.linkedin_format === "conversation" ? "Conversation Ad" : "InMail"}
+                          </Badge>
+                          <span className="text-xs font-normal text-muted">
+                            {d.subject ?? "(open to view flow)"}
+                          </span>
+                        </span>
+                      ) : (
+                        (d.headline ?? "—")
+                      )}
+                    </TableCell>
                     <TableCell className="max-w-64 text-xs text-muted">
                       {d.description ?? "—"}
                       {d.cta ? <span className="mt-0.5 block text-accent">{d.cta}</span> : null}
