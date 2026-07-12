@@ -24,6 +24,7 @@ import {
 } from "@/lib/ce-queries";
 import { listExportFiles, resolveExportsDir } from "@/lib/exports-dir";
 import { formatDate } from "@/lib/format";
+import { Pagination, pageSlice } from "@/components/ui/pagination";
 
 export const dynamic = "force-dynamic";
 
@@ -47,7 +48,7 @@ function formatBytes(n: number): string {
 export default async function GenerationPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; status?: string }>;
+  searchParams: Promise<{ tab?: string; status?: string; page?: string }>;
 }) {
   const sp = await searchParams;
   const tab: TabValue = TAB_VALUES.includes(sp.tab as TabValue)
@@ -65,6 +66,11 @@ export default async function GenerationPage({
 
   const exportsAvailable = resolveExportsDir() !== null;
   const exportFiles = tab === "rejects" ? listExportFiles() : [];
+  const currentPage = Number(sp.page) || 1;
+  const pagedKeywords = pageSlice(keywords.rows, currentPage);
+  const pagedDrafts = pageSlice(drafts.rows, currentPage);
+  const pagedAngles = pageSlice(angles.rows, currentPage);
+  const pagedRejects = pageSlice(rejects.rows, currentPage);
 
   return (
     <div className="space-y-6">
@@ -116,6 +122,7 @@ export default async function GenerationPage({
         ) : keywords.rows.length === 0 ? (
           <EmptyState message="No keyword candidates in the latest run (or none match this filter)." />
         ) : (
+          <>
           <TableScroll>
             <Table>
               <TableHeader>
@@ -135,7 +142,7 @@ export default async function GenerationPage({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {keywords.rows.map((k, i) => (
+                {pagedKeywords.items.map((k, i) => (
                   <TableRow key={`${k.campaign_name}-${k.keyword}-${i}`}>
                     <TableCell className="max-w-52">
                       <Link
@@ -216,8 +223,10 @@ export default async function GenerationPage({
               </TableBody>
             </Table>
           </TableScroll>
+          </>
         )
       ) : null}
+      {tab === "keywords" ? <Pagination page={pagedKeywords.page} totalPages={pagedKeywords.totalPages} total={keywords.rows.length} params={{ tab, status }} /> : null}
 
       {tab === "copy" ? (
         drafts.error ? (
@@ -225,6 +234,7 @@ export default async function GenerationPage({
         ) : drafts.rows.length === 0 ? (
           <EmptyState message="No ad copy drafts in the latest run (or none match this filter)." />
         ) : (
+          <>
           <TableScroll>
             <Table>
               <TableHeader>
@@ -239,7 +249,7 @@ export default async function GenerationPage({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {drafts.rows.map((d, i) => (
+                {pagedDrafts.items.map((d, i) => (
                   <TableRow key={`${d.asset_id}-${i}`}>
                     <TableCell className="max-w-52">
                       <Link
@@ -306,8 +316,10 @@ export default async function GenerationPage({
               </TableBody>
             </Table>
           </TableScroll>
+          </>
         )
       ) : null}
+      {tab === "copy" ? <Pagination page={pagedDrafts.page} totalPages={pagedDrafts.totalPages} total={drafts.rows.length} params={{ tab, status }} /> : null}
 
       {tab === "angles" ? (
         angles.error ? (
@@ -315,6 +327,7 @@ export default async function GenerationPage({
         ) : angles.rows.length === 0 ? (
           <EmptyState message="No audience angles in the latest run (or none match this filter)." />
         ) : (
+          <>
           <TableScroll>
             <Table>
               <TableHeader>
@@ -329,7 +342,7 @@ export default async function GenerationPage({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {angles.rows.map((a, i) => (
+                {pagedAngles.items.map((a, i) => (
                   <TableRow key={`${a.asset_id}-${i}`}>
                     <TableCell className="max-w-52">
                       <Link
@@ -384,8 +397,10 @@ export default async function GenerationPage({
               </TableBody>
             </Table>
           </TableScroll>
+          </>
         )
       ) : null}
+      {tab === "angles" ? <Pagination page={pagedAngles.page} totalPages={pagedAngles.totalPages} total={angles.rows.length} params={{ tab, status }} /> : null}
 
       {tab === "rejects" ? (
         <div className="space-y-4">
@@ -426,6 +441,7 @@ export default async function GenerationPage({
           ) : rejects.rows.length === 0 ? (
             <EmptyState message="No keyword rejects in the latest run." />
           ) : (
+            <>
             <TableScroll>
               <Table>
                 <TableHeader>
@@ -438,7 +454,7 @@ export default async function GenerationPage({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rejects.rows.map((r, i) => (
+                  {pagedRejects.items.map((r, i) => (
                     <TableRow key={`${r.campaign_name}-${r.keyword}-${i}`}>
                       <TableCell className="max-w-52">
                         <span className="font-medium text-foreground">{r.campaign_name}</span>
@@ -463,7 +479,9 @@ export default async function GenerationPage({
                 </TableBody>
               </Table>
             </TableScroll>
+            </>
           )}
+          <Pagination page={pagedRejects.page} totalPages={pagedRejects.totalPages} total={rejects.rows.length} params={{ tab }} />
         </div>
       ) : null}
     </div>

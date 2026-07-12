@@ -54,12 +54,12 @@ export function SectionHeading({
   className?: string;
 }) {
   return (
-    <div className={cn("mb-4", className)}>
-      <h2 className="text-base font-semibold tracking-tight text-foreground">
+    <div className={cn("mb-5", className)}>
+      <h2 className="text-lg font-semibold tracking-[-.025em] text-foreground">
         {title}
       </h2>
       {description ? (
-        <p className="mt-0.5 text-sm text-muted">{description}</p>
+        <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted">{description}</p>
       ) : null}
     </div>
   );
@@ -97,7 +97,7 @@ export function KpiCard({
             ? "text-danger"
             : "text-foreground";
   return (
-    <div className="rounded-xl border border-border bg-surface p-4 shadow-sm transition-shadow hover:border-white/20">
+    <div className="rounded-2xl border border-white/[.08] bg-[linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.012))] p-4 shadow-[0_16px_45px_rgba(0,0,0,.2)] transition duration-300 hover:-translate-y-0.5 hover:border-violet-300/20">
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
         {label}
       </p>

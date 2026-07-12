@@ -14,7 +14,7 @@ export function TableScroll({
   return (
     <div
       className={cn(
-        "scroll-thin w-full overflow-x-auto rounded-xl border border-border bg-surface",
+        "scroll-thin w-full overflow-x-auto rounded-2xl border border-white/[0.08] bg-surface/75 shadow-[0_18px_50px_rgba(0,0,0,.18)] backdrop-blur-xl",
         className,
       )}
       {...props}
@@ -40,7 +40,7 @@ export function TableHeader({
 }: React.HTMLAttributes<HTMLTableSectionElement>) {
   return (
     <thead
-      className={cn("border-b border-border bg-white/[0.03]", className)}
+      className={cn("sticky top-0 z-[1] border-b border-border bg-[#11111b]/95 backdrop-blur", className)}
       {...props}
     />
   );
@@ -59,7 +59,7 @@ export function TableRow({
 }: React.HTMLAttributes<HTMLTableRowElement>) {
   return (
     <tr
-      className={cn("transition-colors hover:bg-white/[0.03]", className)}
+      className={cn("transition-colors hover:bg-violet-300/[0.045]", className)}
       {...props}
     />
   );

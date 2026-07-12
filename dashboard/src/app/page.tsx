@@ -40,7 +40,7 @@ function VitalTile({
   return (
     <Link
       href={href}
-      className="group rounded-xl border border-border bg-surface p-4 transition-colors hover:border-accent/40"
+      className="group relative overflow-hidden rounded-2xl border border-white/[.08] bg-[linear-gradient(145deg,rgba(255,255,255,.055),rgba(255,255,255,.012))] p-5 shadow-[0_16px_45px_rgba(0,0,0,.22)] transition duration-300 before:absolute before:inset-x-0 before:top-0 before:h-px before:bg-gradient-to-r before:from-transparent before:via-violet-200/50 before:to-transparent hover:-translate-y-1 hover:border-accent/35"
     >
       <p className="text-[11px] font-medium uppercase tracking-wide text-muted">
         {label}
@@ -86,12 +86,12 @@ export default async function HomePage() {
   const anyLiveData = healths.some((h) => h.latest_date !== null);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       {/* Vital signs — small, calm tiles (vision §2) */}
       <section>
         <SectionHeading
-          title="Vital Signs"
-          description="The whole MIS at a glance. Every tile links to the rows behind it."
+          title="System pulse"
+          description="Live operational signals from across the intelligence loop. Every metric links to its source records."
         />
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <VitalTile
@@ -209,8 +209,8 @@ export default async function HomePage() {
       {/* Live system graph (vision §2, §2b) — nodes/edges/bots computed server-side in lib/graph.ts */}
       <section>
         <SectionHeading
-          title="System Map"
-          description="Force-directed live view of the MIS closed loop — Intelligence + Performance → Generation → Review → Export → Performance → Lead Quality → back. Click any node or caretaker bot to open its page."
+          title="Neural system diagnostics"
+          description="Your MIS visualized as a living machine. Each health marker is a real pipeline or data surface—select one to inspect it."
         />
         <SystemGraph nodes={graph.nodes} edges={graph.edges} bots={graph.bots} />
       </section>

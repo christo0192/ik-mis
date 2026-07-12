@@ -20,10 +20,12 @@ import {
   getTopSkills,
 } from "@/lib/queries";
 import { formatDate, formatSalaryRange } from "@/lib/format";
+import { Pagination, pageSlice } from "@/components/ui/pagination";
 
 export const dynamic = "force-dynamic";
 
-export default async function JobsPage() {
+export default async function JobsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const sp = await searchParams;
   const [jobs, stats, byRole, byFamily, byTier, topSkills] = await Promise.all([
     getJobs(),
     getJobStats(),
@@ -44,6 +46,7 @@ export default async function JobsPage() {
   const skillData = topSkills.map((s) => ({ label: s.key, value: s.count }));
   const familyData = byFamily.map((f) => ({ label: f.key, value: f.count }));
   const tierData = byTier.map((t) => ({ label: t.key, value: t.count }));
+  const paged = pageSlice(jobs, Number(sp.page) || 1);
 
   return (
     <div className="space-y-8">
@@ -120,7 +123,7 @@ export default async function JobsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {jobs.map((j, i) => (
+                {paged.items.map((j, i) => (
                   <TableRow key={`${j.title}-${j.company}-${i}`}>
                     <TableCell className="max-w-72">
                       <span className="font-medium text-foreground">
@@ -162,6 +165,7 @@ export default async function JobsPage() {
             </Table>
           </TableScroll>
         )}
+        <Pagination page={paged.page} totalPages={paged.totalPages} total={jobs.length} />
       </section>
     </div>
   );
