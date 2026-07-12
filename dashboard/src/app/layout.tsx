@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import "./globals.css";
 
 import { SidebarNav } from "@/components/sidebar-nav";
@@ -21,23 +22,33 @@ export default function RootLayout({
     >
       <body className="mc-backdrop min-h-full bg-background text-foreground">
         <div className="flex min-h-screen">
-          {/* Sidebar */}
-          <aside className="hidden w-[248px] shrink-0 flex-col border-r border-white/[0.07] bg-black/35 backdrop-blur-2xl md:flex">
-            <div className="flex h-[76px] items-center gap-3 border-b border-white/[0.07] px-5">
-              <span className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-violet-200/25 bg-[linear-gradient(145deg,#b9a8ff,#6e45e8)] text-xs font-black tracking-tight text-white shadow-[0_0_24px_rgba(130,92,246,.35)]">
-                IK<span className="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full border-2 border-[#08080e] bg-success" />
-              </span>
-              <div className="leading-tight">
-                <p className="text-sm font-semibold text-foreground">
-                  Mission Control
-                </p>
-                <p className="text-[10px] uppercase tracking-[.14em] text-muted">Intelligence OS</p>
+          {/* Sidebar — a collapsed 76px rail (holds layout width so content never
+              reflows) whose inner panel is fixed to the viewport and expands to
+              248px on hover, overlaying the content. Pure CSS; labels fade in via
+              the named `group/sidebar` hover. */}
+          <aside className="hidden w-[76px] shrink-0 md:block" aria-label="Sidebar navigation">
+            <div className="group/sidebar fixed inset-y-0 left-0 z-50 flex w-[76px] flex-col overflow-hidden border-r border-white/[0.07] bg-black/40 backdrop-blur-2xl transition-[width] duration-200 ease-out hover:w-[248px] hover:shadow-[10px_0_45px_rgba(0,0,0,.55)]">
+              <div className="flex h-[76px] items-center gap-3 border-b border-white/[0.07] px-[18px]">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white p-1.5 shadow-[0_0_22px_rgba(74,144,217,.35)]">
+                  <Image
+                    src="/ik-logo.png"
+                    alt="Interview Kickstart"
+                    width={36}
+                    height={26}
+                    priority
+                    className="h-auto w-full object-contain"
+                  />
+                </span>
+                <div className="min-w-0 whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover/sidebar:opacity-100">
+                  <p className="text-sm font-semibold text-foreground">Mission Control</p>
+                  <p className="text-[10px] uppercase tracking-[.14em] text-muted">Interview Kickstart</p>
+                </div>
               </div>
-            </div>
-            <SidebarNav />
-            <div className="m-3 mt-auto rounded-2xl border border-violet-300/15 bg-violet-400/[.06] p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-violet-200">System status</p>
-              <p className="mt-1.5 text-[11px] leading-relaxed text-muted">Live BigQuery telemetry<br />Review-only controls</p>
+              <SidebarNav />
+              <div className="m-3 mt-auto whitespace-nowrap rounded-2xl border border-violet-300/15 bg-violet-400/[.06] p-4 opacity-0 transition-opacity duration-150 group-hover/sidebar:opacity-100">
+                <p className="text-[10px] font-semibold uppercase tracking-[.16em] text-violet-200">System status</p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted">Live BigQuery telemetry<br />Review-only controls</p>
+              </div>
             </div>
           </aside>
 
