@@ -48,6 +48,7 @@ export function SidebarNav({ mobile = false }: { mobile?: boolean }) {
             href={item.href}
             prefetch
             aria-current={active ? "page" : undefined}
+            title={!mobile ? item.label : undefined}
             className={cn(
               "group relative overflow-hidden rounded-xl font-medium transition-all duration-200",
               mobile ? "flex min-w-0 flex-col items-center gap-1 px-1 py-2 text-[9px]" : "flex items-center gap-3 px-3 py-2.5 text-sm",
@@ -64,7 +65,15 @@ export function SidebarNav({ mobile = false }: { mobile?: boolean }) {
                 active ? "text-accent" : "text-muted/70",
               )}
             />
-            <span className={cn(mobile && "max-w-full truncate")}>{item.label}</span>
+            <span
+              className={cn(
+                mobile
+                  ? "max-w-full truncate"
+                  : "whitespace-nowrap opacity-0 transition-opacity duration-150 group-hover/sidebar:opacity-100",
+              )}
+            >
+              {item.label}
+            </span>
             {item.soon ? (
               <span className="ml-auto rounded-full border border-border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted/70">
                 Soon
