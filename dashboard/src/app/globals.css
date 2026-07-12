@@ -75,24 +75,28 @@ body {
   mask-composite: intersect;
 }
 .robot-avatar { filter: brightness(1.06) saturate(1.08); }
-.neural-chamber::after { content: ""; position: absolute; inset: -30%; pointer-events: none; background: conic-gradient(from 90deg, transparent, rgba(124,58,237,.08), transparent 22%, rgba(34,211,238,.06), transparent 52%); animation: chamber-rotate 22s linear infinite; }
-.ai-stars { background-image: radial-gradient(circle, rgba(196,181,253,.75) 0 1px, transparent 1.5px), radial-gradient(circle, rgba(103,232,249,.55) 0 1px, transparent 1.5px); background-position: 0 0, 31px 47px; background-size: 83px 83px, 113px 113px; animation: star-drift 18s linear infinite; mask-image: radial-gradient(circle at center, black, transparent 82%); }
+/* Robot-area animations only ever move GPU-composited props (transform / opacity).
+   Anything glow-y keeps a STATIC box-shadow (painted once) and pulses its opacity,
+   so the compositor never re-rasterizes a shadow/gradient per frame -- this is the
+   fix for the heavy/laggy robot area. `will-change` promotes each animated layer to
+   its own compositor layer so its motion can't dirty the rest of the page. */
+.neural-chamber::after { content: ""; position: absolute; inset: -30%; pointer-events: none; background: conic-gradient(from 90deg, transparent, rgba(124,58,237,.08), transparent 22%, rgba(34,211,238,.06), transparent 52%); animation: chamber-rotate 26s linear infinite; will-change: transform; transform: translateZ(0); }
+.ai-stars { background-image: radial-gradient(circle, rgba(196,181,253,.75) 0 1px, transparent 1.5px), radial-gradient(circle, rgba(103,232,249,.55) 0 1px, transparent 1.5px); background-position: 0 0, 31px 47px; background-size: 83px 83px, 113px 113px; mask-image: radial-gradient(circle at center, black, transparent 82%); opacity: .85; }
 .energy-ring::before, .energy-ring::after { content: ""; position: absolute; height: 8px; width: 8px; border-radius: 999px; background: #c4b5fd; box-shadow: 0 0 8px #c4b5fd, 0 0 22px #8b5cf6; left: 50%; top: -4px; }
-.energy-ring-one { animation: ring-spin 12s linear infinite; }
-.energy-ring-two { animation: ring-spin-reverse 9s linear infinite; }
-.telemetry-path { fill: none; stroke-width: 1.5; stroke-dasharray: 5 13; animation: telemetry-flow 2.2s linear infinite; }
-.telemetry-path-delayed { animation-delay: -1.1s; }
+.energy-ring-one { animation: ring-spin 14s linear infinite; will-change: transform; }
+.energy-ring-two { animation: ring-spin-reverse 11s linear infinite; will-change: transform; }
+.telemetry-path { fill: none; stroke-width: 1.5; stroke-dasharray: 5 13; animation: telemetry-flow 2.6s linear infinite; }
+.telemetry-path-delayed { animation-delay: -1.3s; }
 .health-marker::before { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(115deg, transparent 20%, rgba(255,255,255,.13) 48%, transparent 72%); transform: translateX(-120%); transition: transform .65s ease; }
 .health-marker:hover::before { transform: translateX(120%); }
-.health-beacon { animation: beacon-pulse 2s ease-in-out infinite; }
-.neural-core { animation: core-luminance 2.8s ease-in-out infinite; }
+.health-beacon { border-radius: 999px; box-shadow: 0 0 11px 3px currentColor; animation: beacon-pulse 2.4s ease-in-out infinite; will-change: opacity; }
+.neural-core { box-shadow: 0 0 26px rgba(167,139,250,.55), 0 0 52px rgba(34,211,238,.15); animation: core-glow 3s ease-in-out infinite; will-change: opacity; }
 @keyframes chamber-rotate { to { transform: rotate(360deg); } }
-@keyframes star-drift { to { background-position: 83px 83px, -82px 160px; } }
 @keyframes ring-spin { to { transform: translate(-50%,-50%) rotate(360deg); } }
 @keyframes ring-spin-reverse { to { transform: translate(-50%,-50%) rotate(-360deg); } }
 @keyframes telemetry-flow { to { stroke-dashoffset: -36; } }
-@keyframes beacon-pulse { 0%,100% { box-shadow: 0 0 0 0 currentColor; } 50% { box-shadow: 0 0 18px 4px currentColor; } }
-@keyframes core-luminance { 0%,100% { box-shadow: 0 0 18px rgba(167,139,250,.35); } 50% { box-shadow: 0 0 38px rgba(167,139,250,.75), 0 0 65px rgba(34,211,238,.18); } }
+@keyframes beacon-pulse { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
+@keyframes core-glow { 0%,100% { opacity: .5; } 50% { opacity: 1; } }
 
 /* Thin, unobtrusive scrollbars for the data tables. */
 .scroll-thin::-webkit-scrollbar {
