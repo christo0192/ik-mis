@@ -17,6 +17,7 @@ import {
   getSocialBySource,
 } from "@/lib/queries";
 import { formatCompact } from "@/lib/format";
+import { Pagination, pageSlice } from "@/components/ui/pagination";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +29,8 @@ function sentimentVariant(s: number | null) {
   return "medium" as const;
 }
 
-export default async function SocialPage() {
+export default async function SocialPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const sp = await searchParams;
   const [social, bySource, byCategory] = await Promise.all([
     getSocial(),
     getSocialBySource(),
@@ -42,6 +44,7 @@ export default async function SocialPage() {
     secondary: s.avg_sentiment ?? undefined,
   }));
   const categoryData = byCategory.map((c) => ({ label: c.key, value: c.count }));
+  const paged = pageSlice(social, Number(sp.page) || 1);
 
   return (
     <div className="space-y-8">
@@ -85,7 +88,7 @@ export default async function SocialPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {social.map((s, i) => (
+                {paged.items.map((s, i) => (
                   <TableRow key={`${s.topic}-${i}`}>
                     <TableCell className="whitespace-nowrap font-medium text-foreground">
                       {s.source ?? "—"}
@@ -119,6 +122,7 @@ export default async function SocialPage() {
             </Table>
           </TableScroll>
         )}
+        <Pagination page={paged.page} totalPages={paged.totalPages} total={social.length} />
       </section>
     </div>
   );

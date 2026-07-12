@@ -16,6 +16,7 @@ import {
   getBlogByUrgency,
 } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
+import { Pagination, pageSlice } from "@/components/ui/pagination";
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +37,8 @@ function matchVariant(m: string | null) {
   return "outline" as const;
 }
 
-export default async function BlogPage() {
+export default async function BlogPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const sp = await searchParams;
   const [blog, byUrgency, byMatch] = await Promise.all([
     getBlog(),
     getBlogByUrgency(),
@@ -45,6 +47,7 @@ export default async function BlogPage() {
 
   const urgencyData = byUrgency.map((u) => ({ label: u.key, value: u.count }));
   const matchData = byMatch.map((m) => ({ label: m.key, value: m.count }));
+  const paged = pageSlice(blog, Number(sp.page) || 1);
 
   return (
     <div className="space-y-8">
@@ -87,7 +90,7 @@ export default async function BlogPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {blog.map((b, i) => (
+                {paged.items.map((b, i) => (
                   <TableRow key={`${b.title}-${i}`}>
                     <TableCell className="whitespace-nowrap font-medium text-foreground">
                       {b.publication ?? "—"}
@@ -140,6 +143,7 @@ export default async function BlogPage() {
             </Table>
           </TableScroll>
         )}
+        <Pagination page={paged.page} totalPages={paged.totalPages} total={blog.length} />
       </section>
     </div>
   );
