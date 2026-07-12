@@ -52,7 +52,7 @@ export function SystemGraph({ nodes }: { nodes: GraphNode[]; edges: GraphEdge[];
       </svg>
       <div className="absolute left-1/2 top-[73%] h-[46%] w-[82%] -translate-x-1/2 -translate-y-1/2 rounded-[50%] bg-violet-500/20 blur-3xl sm:top-[70%] sm:h-[54%] lg:top-[54%] lg:h-[72%] lg:w-[58%]" />
       <div className="robot-merge absolute left-1/2 top-[73%] z-10 h-[48%] w-[min(82%,390px)] -translate-x-1/2 -translate-y-1/2 sm:top-[70%] sm:h-[56%] lg:top-[53%] lg:h-[76%] lg:w-[min(42%,470px)]">
-        <Image src="/visuals/mis-diagnostic-robot.webp" alt="MIS diagnostic robot representing live system health" fill priority sizes="(max-width: 768px) 78vw, 510px" className="robot-avatar object-contain drop-shadow-[0_0_48px_rgba(139,92,246,.55)]" />
+        <Image src="/visuals/mis-diagnostic-robot.webp" alt="MIS diagnostic robot representing live system health" fill priority sizes="(max-width: 768px) 78vw, 510px" className="robot-avatar object-contain drop-shadow-[0_0_26px_rgba(139,92,246,.45)]" />
       </div>
 
       <div className="absolute left-5 top-24 z-20 hidden items-center gap-2 text-[9px] uppercase tracking-[.18em] text-cyan-200/70 sm:flex"><Zap className="h-3 w-3" />Inference mesh active</div>
