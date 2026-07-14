@@ -43,6 +43,10 @@ PYTHON="${GENERATION_PYTHON_BIN:-python3}"
 
 export DRY_RUN="${DRY_RUN:-true}"
 FORCE_LEAD_QUALITY="${FORCE_LEAD_QUALITY:-false}"
+# Default under `set -u` (unset would crash the whole chain -- the 2026-07-12..14
+# outage: this var was referenced at line ~80 without a default, so every run
+# died right after collect_kw_perf, before generate_assets ever ran).
+LEAD_QUALITY_WEEKLY="${LEAD_QUALITY_WEEKLY:-false}"
 INSTRUMENT_WINDOW_DAYS="${INSTRUMENT_WINDOW_DAYS:-7}"
 
 log() { echo "[run_daily] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }

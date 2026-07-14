@@ -2,7 +2,7 @@
 
 **Step 1 (Initial):**
 
-Hi \[First Name\], I noticed you explored **Interview Kickstart’s programs** recently. Many tech professionals/Many professionals with experience as \[Job Title\], like you, have **landed roles in MAANG+ companies** by **sharpening interview skills and upskilling with GenAI/Agentic AI.**
+Hi \[First Name\], I noticed you explored **Interview Kickstart’s programs** recently. You clearly know your craft \- and many senior professionals like you (across roles such as \[Job Title\]) have **landed roles in MAANG+ companies** by **sharpening interview skills and upskilling with GenAI/Agentic AI.**
 
 Would you like to see how the **Transformative GenAI \+ Interview Prep Lab Program** fits your career path?
 
@@ -93,7 +93,7 @@ Talk to you soon\!
 
 ### **Step 1 (Initial)**
 
-Hi \[First Name\], I noticed you explored **Interview Kickstart’s programs** recently. Many tech professionals/Many professionals with experience as \[Job Title\], like you, have **transitioned into AI/ML roles in MAANG+ companies** by **upskilling in the latest AI/ML tech** and **sharpening interview skills.**
+Hi \[First Name\], I noticed you explored **Interview Kickstart’s programs** recently. You’ve clearly built real depth in your field \- and many senior professionals like you (across roles such as \[Job Title\]) have **transitioned into AI/ML roles in MAANG+ companies** by **upskilling in the latest AI/ML tech** and **sharpening interview skills.**
 
 Would you like to see how our **Flagship Machine Learning Program** fits your career path?
 
@@ -180,4 +180,18 @@ For now, here’s the **Program Brochure** of the **Flagship Machine Learning Pr
 * Feel free to book a call here anytime: \[book a call link\]
 
 Talk to you soon\!
+
+<!--
+NOTE for the ad-copy brain (not part of the ad): STRUCTURE + TONE exemplar.
+Every LinkedIn ad MUST follow three rules:
+1. NO PwC — we no longer offer it. Name the program to match the campaign:
+   "Interview Kickstart EdgeUp" for EdgeUp (AI) campaigns, "Interview Kickstart
+   LevelUp" for LevelUp (SWE/DSA/system-design) campaigns. Never "PwC".
+2. Broaden the audience — even on a role-named campaign (TPM/EM/SWE), address the
+   wider senior band so an adjacent role (e.g. a VP seeing a TPM ad) doesn't
+   dismiss it. `[Job Title]` personalises to the recipient; don't hard-name one role.
+3. Acknowledge their existing competence FIRST — recognise they're already good at
+   what they do before introducing the shift and the pitch.
+-->
+
 
