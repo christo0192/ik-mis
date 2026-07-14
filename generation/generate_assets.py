@@ -111,6 +111,12 @@ MAX_DIGEST_ROWS = int(os.environ.get("CONDUCTOR_MAX_DIGEST_ROWS", "20"))
 # dropped from output -- it just isn't offered to the brain as a target.
 MAX_REGISTERED_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_REGISTERED_CAMPAIGNS", "80"))
 
+# LinkedIn InMail/Conversation bodies are long (~3-4K chars each). Generating them
+# for many LinkedIn campaigns in one copy synth blows the timeout (the 2026-07-14
+# copy-path failures). Cap the LinkedIn campaigns the copy brain sees SEPARATELY
+# from the cheap Google RSA campaigns, so the heavy InMail output stays bounded.
+MAX_LINKEDIN_COPY_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_LINKEDIN_CAMPAIGNS", "5"))
+
 # Keyword Planner demand grounding (docs/keyword-planner-integration-plan.md).
 # Ships DARK: the whole enrich+expand block is skipped unless this is "true",
 # so with it off the keyword path is byte-identical to today.
@@ -488,13 +494,21 @@ def load_registered_campaigns(from_fixture: Optional[str], platforms: tuple[str,
                 "program": entry.program, "platform": entry.platform,
                 "status": entry.status or "active",
             })
-    if len(out) > MAX_REGISTERED_CAMPAIGNS:
-        total = len(out)
-        out = _cap_registered_campaigns(out, MAX_REGISTERED_CAMPAIGNS)
-        log.info("registered_campaigns: capped %d -> %d for the digest "
-                 "(round-robin across platform/segment; registry.check stays "
-                 "warn-only so no output row is dropped)", total, len(out))
-    return out
+    # Cap LinkedIn (heavy InMail output) and non-LinkedIn (cheap Google RSA)
+    # campaigns independently so the single copy synth stays bounded. Keyword
+    # path passes platforms=("google",) only, so `li` is empty there -- unchanged.
+    non_li = [e for e in out if e.get("platform") != "linkedin"]
+    li = [e for e in out if e.get("platform") == "linkedin"]
+    if len(li) > MAX_LINKEDIN_COPY_CAMPAIGNS:
+        log.info("registered_campaigns: capping linkedin %d -> %d (InMail bodies are heavy)",
+                 len(li), MAX_LINKEDIN_COPY_CAMPAIGNS)
+        li = li[:MAX_LINKEDIN_COPY_CAMPAIGNS]
+    if len(non_li) > MAX_REGISTERED_CAMPAIGNS:
+        log.info("registered_campaigns: capping non-linkedin %d -> %d "
+                 "(round-robin across segment; registry.check stays warn-only)",
+                 len(non_li), MAX_REGISTERED_CAMPAIGNS)
+        non_li = _cap_registered_campaigns(non_li, MAX_REGISTERED_CAMPAIGNS)
+    return non_li + li
 
 
 def _cap_registered_campaigns(rows: list[dict], cap: int) -> list[dict]:
