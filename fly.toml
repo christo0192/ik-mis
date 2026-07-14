@@ -48,7 +48,14 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # Headroom so a heavier LinkedIn day doesn't tip the single copy synth over
   # and fail the day's copy generation. Proper follow-up: cap the copy output
   # (fewer campaigns/rows per run) rather than just raising the ceiling.
-  GENERATION_LLM_TIMEOUT_S = "1200"
+  # 1800s (was 1200): the copy synth hit 1211s -> timed out -> fail-fast killed
+  # the whole chain (2026-07-14). The longer LinkedIn InMail templates pushed it
+  # over. Headroom + the campaign cap below keep it comfortably under the ceiling.
+  GENERATION_LLM_TIMEOUT_S = "1800"
+  # Copy output driver: the brain generates copy per registered campaign. Cap to
+  # 50 (was default 80) so the single copy synth stays fast/bounded now that
+  # LinkedIn InMail/Conversation bodies are long. Fewer, more-focused campaigns.
+  CONDUCTOR_MAX_REGISTERED_CAMPAIGNS = "50"
   # Keyword Planner demand grounding + topic routing + already-running gate
   # (docs/keyword-planner-integration-plan.md). Enabled 2026-07-10 after a live
   # manual verify run confirmed correct enrichment/routing/exclusion on the real

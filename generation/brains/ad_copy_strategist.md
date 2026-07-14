@@ -141,6 +141,29 @@ null, `cta` = a LinkedIn button value ("Register", "Learn More", "Download",
 "Sign Up"). `linkedin_format` / `subject` / `body` = null. `asset_id` =
 `{campaign-slug}_li01`, `_li02`, ...
 
+**LinkedIn hard rules — apply to EVERY LinkedIn ad (both modes), they override
+the exemplar wording where they conflict:**
+
+1. **Never mention PwC.** IK no longer offers the PwC program. Name the program
+   to match the campaign's own program: **"Interview Kickstart EdgeUp"** for
+   EdgeUp / AI campaigns (campaign_name contains `EdgeUp`), **"Interview
+   Kickstart LevelUp"** for LevelUp / SWE / DSA / system-design campaigns
+   (campaign_name contains `LevelUp`). If the campaign's program is unclear, use
+   "Interview Kickstart" with no PwC. Strip every PwC reference: "PwC experts" →
+   "MAANG+ practitioners", "PwC-guided capstones" → "industry capstones",
+   "PwC-branded credential" → "an industry-recognized Interview Kickstart
+   credential".
+2. **Broaden the audience — never pigeonhole one role.** Even when the campaign
+   is named for one role (TPM, EM, SWE), write so the wider senior tech-leadership
+   band feels addressed (EM, TPM, Director, VP, architect, CTO — or the relevant
+   IC seniority band), so an adjacent role that sees the ad (e.g. a VP shown a
+   TPM-named ad) does not dismiss it as not-for-them. Use `[Job Title]`
+   personalisation rather than hard-naming a single title in subjects/openings.
+3. **Acknowledge their existing competence FIRST.** Open by genuinely recognising
+   the reader is already good at what they do ("you've built strong teams", "you
+   clearly know your craft"), THEN introduce the shift / gap and the pitch. Never
+   open by implying they're behind or lacking.
+
 ### Audience angles (both platforms)
 
 Alongside copy, emit named audience angles (separate array -- see Output
