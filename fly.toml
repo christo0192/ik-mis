@@ -55,7 +55,11 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # Copy output driver: the brain generates copy per registered campaign. Cap to
   # 50 (was default 80) so the single copy synth stays fast/bounded now that
   # LinkedIn InMail/Conversation bodies are long. Fewer, more-focused campaigns.
-  CONDUCTOR_MAX_REGISTERED_CAMPAIGNS = "50"
+  CONDUCTOR_MAX_REGISTERED_CAMPAIGNS = "40"
+  # Cap LinkedIn campaigns getting InMail/Conversation copy per run -- their long
+  # bodies are what blew the copy synth past the timeout on 2026-07-14. Google RSA
+  # is cheap and stays at the cap above; LinkedIn is the heavy, bounded lever.
+  CONDUCTOR_MAX_LINKEDIN_CAMPAIGNS = "5"
   # Keyword Planner demand grounding + topic routing + already-running gate
   # (docs/keyword-planner-integration-plan.md). Enabled 2026-07-10 after a live
   # manual verify run confirmed correct enrichment/routing/exclusion on the real
