@@ -117,6 +117,22 @@ MAX_REGISTERED_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_REGISTERED_CAMPAIGN
 # from the cheap Google RSA campaigns, so the heavy InMail output stays bounded.
 MAX_LINKEDIN_COPY_CAMPAIGNS = int(os.environ.get("CONDUCTOR_MAX_LINKEDIN_CAMPAIGNS", "5"))
 
+# Copy-synth batching (2026-07-14). The copy path used to make ONE `claude -p`
+# call for EVERY campaign at once. At live scale (40 Google RSA + 5 LinkedIn
+# InMail, with the long rewritten LinkedIn templates) that single call's OUTPUT
+# volume ran past the 1800s timeout three days running -- raising the ceiling and
+# capping campaign counts never converged, because the model just generates to
+# whatever ceiling it is given. Real fix: pack campaigns into small weight-bounded
+# batches and synth each batch in its own `claude -p` call, so every call's output
+# is small enough to finish well under the timeout. LinkedIn campaigns weigh
+# COPY_WEIGHT_LINKEDIN Google-RSA-equivalents (their InMail/Conversation bodies are
+# ~7x heavier to generate). A small registry (e.g. the fixture: 3 google + 1
+# linkedin = weight 10) packs into a SINGLE batch -> byte-identical to the old
+# single-call path. Per-batch fail-soft: one slow/failed batch degrades the day's
+# copy, it never zeroes the whole run again.
+COPY_BATCH_WEIGHT_BUDGET = int(os.environ.get("CONDUCTOR_COPY_BATCH_BUDGET", "20"))
+COPY_WEIGHT_LINKEDIN = int(os.environ.get("CONDUCTOR_COPY_WEIGHT_LINKEDIN", "7"))
+
 # Keyword Planner demand grounding (docs/keyword-planner-integration-plan.md).
 # Ships DARK: the whole enrich+expand block is skipped unless this is "true",
 # so with it off the keyword path is byte-identical to today.
@@ -532,6 +548,36 @@ def _cap_registered_campaigns(rows: list[dict], cap: int) -> list[dict]:
     return out
 
 
+def _campaign_synth_weight(entry: dict) -> int:
+    """Generation cost of one campaign, in Google-RSA-equivalents. LinkedIn
+    InMail/Conversation bodies are long (~3-4K chars vs a handful of short RSA
+    assets), so they weigh COPY_WEIGHT_LINKEDIN; everything else weighs 1."""
+    return COPY_WEIGHT_LINKEDIN if entry.get("platform") == "linkedin" else 1
+
+
+def batch_campaigns_for_synth(campaigns: list[dict], budget: int = COPY_BATCH_WEIGHT_BUDGET
+                              ) -> list[list[dict]]:
+    """Pack campaigns (in the loader's order -- Google first, then LinkedIn) into
+    consecutive batches whose total synth weight stays <= `budget`, so no single
+    copy-synth `claude -p` call generates more output than it can finish inside
+    the LLM timeout (the 2026-07-14 fix). A campaign heavier than the whole budget
+    still gets its own batch -- it is never dropped. Returns [] only for an empty
+    input; callers that must always make at least one call handle that."""
+    batches: list[list[dict]] = []
+    cur: list[dict] = []
+    cur_w = 0
+    for e in campaigns:
+        w = _campaign_synth_weight(e)
+        if cur and cur_w + w > budget:
+            batches.append(cur)
+            cur, cur_w = [], 0
+        cur.append(e)
+        cur_w += w
+    if cur:
+        batches.append(cur)
+    return batches
+
+
 # ---------------------------------------------------------------------------
 # Digest builders
 # ---------------------------------------------------------------------------
@@ -907,31 +953,54 @@ def run_copy_path(run_date_: date, run_id: str, from_fixture: Optional[str]) -> 
     t0 = time.monotonic()
     registry.reset_unregistered_report()
     digest, degraded = build_copy_digest(run_date_, run_id, from_fixture)
-    brain_text = COPY_BRAIN_FILE.read_text(encoding="utf-8") + _linkedin_template_block()
-    prompt = assemble_prompt(brain_text, digest)
+    base_brain = COPY_BRAIN_FILE.read_text(encoding="utf-8")
+    linkedin_block = _linkedin_template_block()
 
-    try:
-        raw = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=llm.LLM_TIMEOUT_S)
-        llm_calls = 1
-    except Exception as e:
-        log.error("copy path: LLM synth failed: %s", _short_err(e))
-        note = _notes(degraded, [f"LLM synth failed: {_short_err(e)}"], {})
-        copy_row = schemas.GenerationRunRow(
-            run_date=run_date_, run_id=run_id, path="copy",
-            candidates_generated=0, passed_filter=0, borderline=0, rejected=0,
-            llm_calls=1, duration_seconds=round(time.monotonic() - t0, 2),
-            status="failed", notes=note)
-        angle_row = schemas.GenerationRunRow(
-            run_date=run_date_, run_id=run_id, path="angle",
-            candidates_generated=0, passed_filter=0, borderline=0, rejected=0,
-            llm_calls=0, duration_seconds=0.0, status="failed", notes=note)
-        return [copy_row.model_dump(), angle_row.model_dump()], False
+    # Batch the campaigns so no single claude -p call generates more than it can
+    # finish inside the timeout (2026-07-14 fix). A small registry packs into one
+    # batch -> one call, identical to the pre-batching path. `[[]]` guarantees at
+    # least one call even with zero campaigns (preserves the old behavior).
+    campaigns = digest.get("registered_campaigns") or []
+    batches = batch_campaigns_for_synth(campaigns) or [[]]
+    if len(batches) > 1:
+        log.info("copy path: %d campaigns -> %d synth batches (weight budget %d, linkedin weight %d)",
+                 len(campaigns), len(batches), COPY_BATCH_WEIGHT_BUDGET, COPY_WEIGHT_LINKEDIN)
 
-    if not isinstance(raw, dict) or "ad_copy" not in raw or "audience_angles" not in raw:
-        keys = sorted(raw) if isinstance(raw, dict) else type(raw).__name__
-        err = f"expected object with keys ad_copy+audience_angles, got {keys}"
-        log.error("copy path: %s", err)
-        note = _notes(degraded, [err], {})
+    all_ad_copy: list = []
+    all_angles: list = []
+    chunk_errors: list[str] = []
+    calls_ok = 0
+    for i, batch in enumerate(batches):
+        # Only the batches that actually contain a LinkedIn campaign pay the cost
+        # of the (large) LinkedIn template block in their prompt.
+        has_li = any(e.get("platform") == "linkedin" for e in batch)
+        brain_text = base_brain + (linkedin_block if has_li else "")
+        chunk_digest = dict(digest)
+        chunk_digest["registered_campaigns"] = batch
+        prompt = assemble_prompt(brain_text, chunk_digest)
+        try:
+            raw = llm.extract_json(prompt, model=llm.SYNTH_MODEL, timeout=llm.LLM_TIMEOUT_S)
+        except Exception as e:
+            log.error("copy path: batch %d/%d LLM synth failed: %s", i + 1, len(batches), _short_err(e))
+            chunk_errors.append(f"batch {i + 1}/{len(batches)} synth failed: {_short_err(e)}")
+            continue
+        if not isinstance(raw, dict) or "ad_copy" not in raw or "audience_angles" not in raw:
+            keys = sorted(raw) if isinstance(raw, dict) else type(raw).__name__
+            err = f"batch {i + 1}/{len(batches)}: expected object with keys ad_copy+audience_angles, got {keys}"
+            log.error("copy path: %s", err)
+            chunk_errors.append(err)
+            continue
+        calls_ok += 1
+        if isinstance(raw["ad_copy"], list):
+            all_ad_copy.extend(raw["ad_copy"])
+        if isinstance(raw["audience_angles"], list):
+            all_angles.extend(raw["audience_angles"])
+
+    llm_calls = len(batches)
+    if calls_ok == 0:
+        # Every batch failed -- no copy for the day (mirrors the old whole-synth
+        # failure path; fail-fast then stops the chain rather than writing partial).
+        note = _notes(degraded, chunk_errors or ["LLM synth failed"], {})
         copy_row = schemas.GenerationRunRow(
             run_date=run_date_, run_id=run_id, path="copy",
             candidates_generated=0, passed_filter=0, borderline=0, rejected=0,
@@ -943,8 +1012,9 @@ def run_copy_path(run_date_: date, run_id: str, from_fixture: Optional[str]) -> 
             llm_calls=0, duration_seconds=0.0, status="failed", notes=note)
         return [copy_row.model_dump(), angle_row.model_dump()], False
 
-    copy_valid, copy_dropped, copy_reasons = gate_copy_rows(raw["ad_copy"])
-    angle_valid, angle_dropped, angle_reasons = gate_angle_rows(raw["audience_angles"])
+    copy_valid, copy_dropped, copy_reasons = gate_copy_rows(all_ad_copy)
+    angle_valid, angle_dropped, angle_reasons = gate_angle_rows(all_angles)
+    copy_reasons = copy_reasons + chunk_errors
 
     write_errors = []
     if copy_valid:
@@ -958,31 +1028,31 @@ def run_copy_path(run_date_: date, run_id: str, from_fixture: Optional[str]) -> 
         except Exception as e:
             write_errors.append(f"audience_angles write failed: {_short_err(e)}")
 
-    log.info("copy path: ad_copy %d generated/%d dropped/%d written; "
+    log.info("copy path: %d batch(es) ok/%d failed; ad_copy %d generated/%d dropped/%d written; "
              "audience_angles %d generated/%d dropped/%d written",
-             len(raw["ad_copy"]) if isinstance(raw["ad_copy"], list) else 0, copy_dropped, len(copy_valid),
-             len(raw["audience_angles"]) if isinstance(raw["audience_angles"], list) else 0,
-             angle_dropped, len(angle_valid))
+             calls_ok, len(chunk_errors),
+             len(all_ad_copy), copy_dropped, len(copy_valid),
+             len(all_angles), angle_dropped, len(angle_valid))
 
     unregistered = registry.unregistered_report()
     duration = round(time.monotonic() - t0, 2)
     copy_status = "success"
-    if degraded or copy_dropped or write_errors or unregistered:
+    if degraded or copy_dropped or write_errors or unregistered or chunk_errors:
         copy_status = "partial"
     angle_status = "success"
-    if degraded or angle_dropped or write_errors or unregistered:
+    if degraded or angle_dropped or write_errors or unregistered or chunk_errors:
         angle_status = "partial"
 
     copy_row = schemas.GenerationRunRow(
         run_date=run_date_, run_id=run_id, path="copy",
-        candidates_generated=len(raw["ad_copy"]) if isinstance(raw["ad_copy"], list) else 0,
+        candidates_generated=len(all_ad_copy),
         passed_filter=len(copy_valid), borderline=None, rejected=copy_dropped,
         llm_calls=llm_calls, duration_seconds=duration, status=copy_status,
         notes=_notes(degraded, copy_reasons + write_errors, unregistered),
     )
     angle_row = schemas.GenerationRunRow(
         run_date=run_date_, run_id=run_id, path="angle",
-        candidates_generated=len(raw["audience_angles"]) if isinstance(raw["audience_angles"], list) else 0,
+        candidates_generated=len(all_angles),
         passed_filter=len(angle_valid), borderline=None, rejected=angle_dropped,
         llm_calls=0, duration_seconds=0.0, status=angle_status,
         notes=_notes(degraded, angle_reasons + write_errors, unregistered) or
