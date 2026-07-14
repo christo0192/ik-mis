@@ -49,8 +49,13 @@ primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom
   # and fail the day's copy generation. Proper follow-up: cap the copy output
   # (fewer campaigns/rows per run) rather than just raising the ceiling.
   # 1800s (was 1200): the copy synth hit 1211s -> timed out -> fail-fast killed
-  # the whole chain (2026-07-14). The longer LinkedIn InMail templates pushed it
-  # over. Headroom + the campaign cap below keep it comfortably under the ceiling.
+  # the whole chain (2026-07-14). Raising the ceiling + capping campaigns did NOT
+  # converge -- one giant claude -p call for all campaigns exceeded even 1800s
+  # three days running. Real fix (2026-07-14, later): the copy path now BATCHES
+  # campaigns into small weight-bounded groups (CONDUCTOR_COPY_BATCH_BUDGET, default
+  # 20; LinkedIn weighs CONDUCTOR_COPY_WEIGHT_LINKEDIN, default 7) and makes one
+  # claude -p call PER batch, each fail-soft. So this 1800s is now a generous
+  # PER-BATCH ceiling (a batch is ~<=480s of output) -- no batch comes near it.
   GENERATION_LLM_TIMEOUT_S = "1800"
   # Copy output driver: the brain generates copy per registered campaign. Cap to
   # 50 (was default 80) so the single copy synth stays fast/bounded now that

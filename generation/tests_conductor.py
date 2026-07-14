@@ -325,9 +325,79 @@ def test_fixture_run_with_mock():
     check(True, "every previewed row round-trips through its schemas.py Pydantic model")
 
 
+# ---------------------------------------------------------------------------
+# (e) copy-synth batching -- 2026-07-14 timeout fix
+# ---------------------------------------------------------------------------
+def test_batch_campaigns_for_synth():
+    g = lambda i: {"campaign_name": f"g{i}", "platform": "google", "segment": "NB", "program": "P"}
+    li = lambda i: {"campaign_name": f"l{i}", "platform": "linkedin", "segment": "NB", "program": "P"}
+
+    # Small set (fixture-scale): 3 google + 1 linkedin = weight 3 + 7 = 10 <= 20
+    # -> exactly ONE batch (identical to the pre-batching single-call path).
+    small = [g(0), g(1), g(2), li(0)]
+    batches = G.batch_campaigns_for_synth(small, budget=20)
+    check(len(batches) == 1, "small campaign set (weight 10) packs into a single synth batch")
+    check(batches[0] == small, "single batch preserves the exact campaign list")
+
+    # Live scale: 45 google + 5 linkedin. Every batch must stay within budget and
+    # the union must equal the input in order (no campaign dropped or duplicated).
+    big = [g(i) for i in range(45)] + [li(i) for i in range(5)]
+    batches = G.batch_campaigns_for_synth(big, budget=20)
+    check(len(batches) > 1, f"live-scale set splits into multiple batches (got {len(batches)})")
+    for b in batches:
+        w = sum(G._campaign_synth_weight(e) for e in b)
+        # A batch may exceed budget only if it is a single over-budget campaign.
+        check(w <= 20 or len(b) == 1, f"batch weight {w} within budget 20 (or a lone heavy campaign)")
+    flat = [e for b in batches for e in b]
+    check(flat == big, "batches concatenate back to the exact input (order preserved, none lost/duplicated)")
+
+    check(G.batch_campaigns_for_synth([], budget=20) == [], "empty input -> no batches")
+
+
+def test_copy_path_batches_multiple_synth_calls():
+    # A large registry must fan out into one claude -p call PER batch, and the
+    # copy path must aggregate every batch's ad_copy/angles into the run counts.
+    big = [{"campaign_name": f"g{i}", "platform": "google", "segment": "NB", "program": "P"}
+           for i in range(45)] + \
+          [{"campaign_name": f"l{i}", "platform": "linkedin", "segment": "NB", "program": "P"}
+           for i in range(5)]
+    expected_batches = len(G.batch_campaigns_for_synth(big))
+    check(expected_batches > 1, f"test fixture yields multiple batches ({expected_batches})")
+
+    calls = {"n": 0}
+
+    def counting_extract_json(prompt, model=None, timeout=None):
+        calls["n"] += 1
+        # One raw row per call -- schema-invalid (dropped by the gate), but still
+        # counted in candidates_generated, which is what proves aggregation.
+        return {"ad_copy": [{"batch": calls["n"]}], "audience_angles": [{"batch": calls["n"]}]}
+
+    orig_digest = G.build_copy_digest
+    orig_extract = llm.extract_json
+    G.build_copy_digest = lambda *a, **k: ({"run_context": {"run_date": str(RUN_DATE), "run_id": RUN_ID},
+                                            "registered_campaigns": big}, [])
+    llm.extract_json = counting_extract_json
+    registry.clear_cache()
+    try:
+        rows, _ = G.run_copy_path(RUN_DATE, RUN_ID, from_fixture=None)
+    finally:
+        G.build_copy_digest = orig_digest
+        llm.extract_json = orig_extract
+
+    check(calls["n"] == expected_batches,
+          f"one synth call per batch ({calls['n']} calls == {expected_batches} batches)")
+    copy_row = _find_row(rows, "copy")
+    check(copy_row["llm_calls"] == expected_batches,
+          f"copy run llm_calls == batch count ({copy_row['llm_calls']})")
+    check(copy_row["candidates_generated"] == expected_batches,
+          f"copy candidates_generated aggregates all batches ({copy_row['candidates_generated']})")
+
+
 if __name__ == "__main__":
     test_cap_registered_campaigns()
     test_assemble_prompt_injection()
     test_load_source_degrades_on_missing_fixture()
     test_fixture_run_with_mock()
+    test_batch_campaigns_for_synth()
+    test_copy_path_batches_multiple_synth_calls()
     print("\nAll tests_conductor assertions passed.")
