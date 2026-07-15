@@ -238,11 +238,19 @@ def test_ad_copy_strategist() -> bool:
         "angles": len(angle_rows),
         "angle_personas_set": all(r.persona for r in angle_rows),
     }
-    banned = re.compile(r"guarantee|13,?500|20,?000 engineers|25,?000|27,?000|66\.5%|60%\+?\s*(increase|average)|₹2[34]\s*LPA",
+    # `pwc`: Claims guardrail 6 -- IK no longer offers the PwC program, so PwC must
+    # never appear in AD TEXT on any platform. Scanned over ad-text fields only:
+    # campaign_name and asset_id legitimately echo a registered PWC campaign
+    # verbatim (metadata, not ad text) and this harness deliberately registers one,
+    # so scanning them would fail on correct output.
+    banned = re.compile(r"guarantee|pwc|price\s*waterhouse|13,?500|20,?000 engineers|25,?000|27,?000|66\.5%|60%\+?\s*(increase|average)|₹2[34]\s*LPA",
                         re.I)
     guardrails_ok = True
     for r in copy_rows:
-        for txt in (r.headline, r.primary_text or "", r.description or ""):
+        # subject/body carry the LinkedIn InMail/Conversation copy -- they were
+        # unscanned before, which left the whole InMail body ungated.
+        for txt in (r.headline or "", r.primary_text or "", r.description or "",
+                    getattr(r, "subject", None) or "", getattr(r, "body", None) or ""):
             if banned.search(txt):
                 guardrails_ok = False
                 errors.append(f"guardrail violation in {r.asset_id!r}: {txt!r}")

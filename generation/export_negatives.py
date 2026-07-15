@@ -507,7 +507,17 @@ def main(argv: list[str] | None = None) -> int:
         "negatives_csv": str(out_path),
         "negatives_count": n,
     }
-    print(json.dumps(report, indent=2, default=str))
+    # Printed COMPACT (single line), not indent=2. Fly's log buffer only retains
+    # ~100 recent lines: at indent=2 this report alone is ~195 lines (20
+    # top_offenders x 9 -- 7 fields plus its own braces), so it evicted every
+    # earlier diagnostic -- including the copy path's per-batch synth errors --
+    # within minutes of the run finishing.
+    # On 2026-07-15 that made batch 1/4's failure unrecoverable from `flyctl logs`
+    # (it survived only in generation_runs.notes). Every field is still emitted;
+    # only the whitespace is gone. Nothing parses this stdout (run_daily.sh's
+    # run_step just executes the step) and the tests assert on
+    # baseline["top_offenders"], not on this text -- so compacting is safe.
+    print(json.dumps(report, default=str))
     return 0
 
 
