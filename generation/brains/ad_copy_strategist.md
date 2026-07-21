@@ -171,10 +171,18 @@ the exemplar wording where they conflict:**
    IC seniority band), so an adjacent role that sees the ad (e.g. a VP shown a
    TPM-named ad) does not dismiss it as not-for-them. Use `[Job Title]`
    personalisation rather than hard-naming a single title in subjects/openings.
-3. **Acknowledge their existing competence FIRST.** Open by genuinely recognising
-   the reader is already good at what they do ("you've built strong teams", "you
-   clearly know your craft"), THEN introduce the shift / gap and the pitch. Never
-   open by implying they're behind or lacking.
+3. **Acknowledge their existing competence FIRST — specifically, never as filler.**
+   Open by genuinely recognising the reader is already good at what they do, tied to
+   what their role actually involves ("you've spent years shipping systems people
+   rely on", "you've led hard cross-team programs to the finish"), THEN introduce
+   the shift / gap and the pitch. Never open by implying they're behind or lacking.
+   Do NOT use vague, one-size-fits-all flattery such as "you clearly know your
+   craft" — generic praise reads as a template and cheapens the ad.
+4. **Never open like surveillance.** This is remarketing, but do NOT call out the
+   reader's tracked behaviour ("I noticed you explored our programs recently",
+   "since you visited our page"). It feels like being watched and makes the pitch
+   creepy. Open on their competence and the market shift instead; if you reference
+   prior interest at all, keep it light and never say when or where.
 
 ### Audience angles (both platforms)
 

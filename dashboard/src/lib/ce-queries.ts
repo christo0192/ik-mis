@@ -375,6 +375,20 @@ export interface ReviewQueueFilter {
   status?: string;
 }
 
+/**
+ * Per-campaign spend (INR) for the latest scored period, from
+ * `lead_quality_scores`. LEFT-JOINed into every review-queue query so rows sort
+ * highest-spending campaign first — reviewers see the campaigns burning the most
+ * money at the top. One row per campaign_name; campaigns with no spend row
+ * (never scored yet) sort last via `NULLS LAST`.
+ */
+const CAMPAIGN_SPEND_CTE = `campaign_spend AS (
+    SELECT campaign_name, SUM(spend_inr) AS spend_inr
+      FROM \`${CE_TABLES.leadQualityScores}\`
+     WHERE period_end = (SELECT MAX(period_end) FROM \`${CE_TABLES.leadQualityScores}\`)
+     GROUP BY campaign_name
+  )`;
+
 export async function getKeywordCandidates(
   filter: ReviewQueueFilter = {},
 ): Promise<SafeResult<KeywordCandidateRow>> {
@@ -401,14 +415,21 @@ export async function getKeywordCandidates(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `SELECT run_date, run_id, campaign_name, segment, keyword, match_type, kind,
-            relevance_verdict, relevance_score, filter_reason, source_signal,
-            status, reviewed_by, reviewed_at,
-            keyword_source, avg_monthly_searches, competition, competition_index,
-            top_of_page_bid_low_inr, top_of_page_bid_high_inr, demand_flag
-       FROM \`${CE_TABLES.keywordCandidates}\`
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY avg_monthly_searches DESC NULLS LAST, relevance_score DESC NULLS LAST, keyword`,
+    `WITH base AS (
+       SELECT run_date, run_id, campaign_name, segment, keyword, match_type, kind,
+              relevance_verdict, relevance_score, filter_reason, source_signal,
+              status, reviewed_by, reviewed_at,
+              keyword_source, avg_monthly_searches, competition, competition_index,
+              top_of_page_bid_low_inr, top_of_page_bid_high_inr, demand_flag
+         FROM \`${CE_TABLES.keywordCandidates}\`
+        WHERE ${clauses.join(" AND ")}
+     ),
+     ${CAMPAIGN_SPEND_CTE}
+     SELECT base.*
+       FROM base
+       LEFT JOIN campaign_spend USING (campaign_name)
+      ORDER BY campaign_spend.spend_inr DESC NULLS LAST,
+               avg_monthly_searches DESC NULLS LAST, relevance_score DESC NULLS LAST, keyword`,
     params,
   );
   return { rows: result.rows.map(mapKeywordCandidate), error: result.error };
@@ -440,13 +461,19 @@ export async function getAdCopyDrafts(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
-            headline, primary_text, description, cta, source_signal,
-            status, reviewed_by, reviewed_at, edit_distance,
-            linkedin_format, subject, body
-       FROM \`${CE_TABLES.adCopyDrafts}\`
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY asset_id`,
+    `WITH base AS (
+       SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
+              headline, primary_text, description, cta, source_signal,
+              status, reviewed_by, reviewed_at, edit_distance,
+              linkedin_format, subject, body
+         FROM \`${CE_TABLES.adCopyDrafts}\`
+        WHERE ${clauses.join(" AND ")}
+     ),
+     ${CAMPAIGN_SPEND_CTE}
+     SELECT base.*
+       FROM base
+       LEFT JOIN campaign_spend USING (campaign_name)
+      ORDER BY campaign_spend.spend_inr DESC NULLS LAST, asset_id`,
     params,
   );
   return { rows: result.rows.map(mapAdCopyDraft), error: result.error };
@@ -478,12 +505,18 @@ export async function getAudienceAngles(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
-            angle_name, angle_description, persona, source_signal,
-            status, reviewed_by, reviewed_at
-       FROM \`${CE_TABLES.audienceAngles}\`
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY asset_id`,
+    `WITH base AS (
+       SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
+              angle_name, angle_description, persona, source_signal,
+              status, reviewed_by, reviewed_at
+         FROM \`${CE_TABLES.audienceAngles}\`
+        WHERE ${clauses.join(" AND ")}
+     ),
+     ${CAMPAIGN_SPEND_CTE}
+     SELECT base.*
+       FROM base
+       LEFT JOIN campaign_spend USING (campaign_name)
+      ORDER BY campaign_spend.spend_inr DESC NULLS LAST, asset_id`,
     params,
   );
   return { rows: result.rows.map(mapAudienceAngle), error: result.error };
@@ -549,11 +582,17 @@ export async function getKeywordRejects(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `SELECT run_date, run_id, campaign_name, segment, keyword, reject_reason,
-            relevance_score, source_signal, negative_candidate
-       FROM \`${CE_TABLES.keywordRejects}\`
-      WHERE ${clauses.join(" AND ")}
-      ORDER BY campaign_name, keyword`,
+    `WITH base AS (
+       SELECT run_date, run_id, campaign_name, segment, keyword, reject_reason,
+              relevance_score, source_signal, negative_candidate
+         FROM \`${CE_TABLES.keywordRejects}\`
+        WHERE ${clauses.join(" AND ")}
+     ),
+     ${CAMPAIGN_SPEND_CTE}
+     SELECT base.*
+       FROM base
+       LEFT JOIN campaign_spend USING (campaign_name)
+      ORDER BY campaign_spend.spend_inr DESC NULLS LAST, campaign_name, keyword`,
     params,
   );
   return { rows: result.rows.map(mapKeywordReject), error: result.error };
