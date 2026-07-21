@@ -1,6 +1,6 @@
 import "server-only";
 
-import { CE_TABLES, safeQuery, type SafeResult } from "@/lib/bq";
+import { CE_TABLES, PMIS_TABLES, safeQuery, type SafeResult } from "@/lib/bq";
 
 /**
  * SERVER-ONLY query layer for the MIS Generation department's `ce_*` tables
@@ -564,34 +564,46 @@ export async function getKeywordRejects(
 // ---------------------------------------------------------------------------
 
 /**
- * Trailing-30-day spend (INR) per REAL campaign_name, summed from
- * `kw_search_term_perf.cost_inr`. This is the only Generation-dept table that
- * carries both a real campaign identity AND spend: `lead_quality_scores` is
- * segment-grain (its campaign_name is the placeholder "segment:<Segment>", see
- * generation/lead_quality.py) and `asset_performance_feedback` is Phase-3
- * staged / not yet populated — so neither can rank the review queue by campaign.
+ * Trailing-30-day spend (INR) per real campaign, summed from the PMIS
+ * intelligence table `pmis_full_funnel` (the anomaly-engine's per-(date,
+ * campaign) funnel), keyed by its `campaign` column across BOTH Google and
+ * LinkedIn.
  *
- * Runs as its own `safeQuery`, decoupled from the review-queue reads: if this
+ * Why this source and not the `ce_*` tables: `lead_quality_scores` is
+ * segment-grain (its campaign_name is the placeholder "segment:<Segment>", see
+ * generation/lead_quality.py), `asset_performance_feedback` is Phase-3 staged /
+ * unpopulated, and `kw_search_term_perf` is Google-search-only. `pmis_full_funnel`
+ * is the one source with real per-campaign spend on every platform.
+ *
+ * Note the documented breakage in `pmis_full_funnel` is its spend<->leads JOIN
+ * (spend rows and lead rows for one campaign don't merge — see lead_quality.py's
+ * writeup). That does NOT affect us: we read spend ONLY, and the spend figures
+ * themselves are real. `spend > 0` drops the lead-only halves of that split.
+ *
+ * Runs as its own `safeQuery`, decoupled from the review-queue reads: if the
  * table is unavailable it degrades to an empty map and the queue simply keeps
  * its existing (secondary) order — a missing spend signal never blanks the
  * candidate/draft/angle/reject sections.
  *
- * Coverage caveat: `kw_search_term_perf` is Google search-term data, so only
- * campaigns with search-term spend get a value. Campaigns without one (e.g.
- * LinkedIn) return no entry and sort last via {@link sortRowsByCampaignSpend}.
+ * Match caveat: this joins on campaign NAME (`pmis_full_funnel.campaign` ->
+ * review-queue `campaign_name`). Spend rows are keyed by the raw Ads campaign
+ * name; any campaign whose name doesn't line up returns no entry and sorts last
+ * via {@link sortRowsByCampaignSpend} (fails safe, never crashes). Coverage
+ * should be spot-checked against live data.
  */
 export async function getCampaignSpendMap(): Promise<Map<string, number>> {
   const result = await safeQuery<Record<string, unknown>>(
-    `SELECT campaign_name, SUM(cost_inr) AS spend_inr
-       FROM \`${CE_TABLES.kwSearchTermPerf}\`
+    `SELECT campaign, SUM(spend) AS spend_inr
+       FROM \`${PMIS_TABLES.fullFunnel}\`
       WHERE date > DATE_SUB(
-              (SELECT MAX(date) FROM \`${CE_TABLES.kwSearchTermPerf}\`),
+              (SELECT MAX(date) FROM \`${PMIS_TABLES.fullFunnel}\`),
               INTERVAL 30 DAY)
-      GROUP BY campaign_name`,
+        AND spend > 0
+      GROUP BY campaign`,
   );
   const map = new Map<string, number>();
   for (const r of result.rows) {
-    const name = String(r.campaign_name ?? "");
+    const name = String(r.campaign ?? "");
     const spend = num(r.spend_inr);
     if (name && spend !== null) map.set(name, spend);
   }

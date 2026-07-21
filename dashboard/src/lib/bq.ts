@@ -71,6 +71,18 @@ export const CE_TABLES = {
 export type CeTableKey = keyof typeof CE_TABLES;
 
 /**
+ * PMIS "intelligence" source tables — the anomaly-engine's own output, living
+ * in the same `SIP_pattern_rag` dataset but WITHOUT the `ce_` prefix (read-only
+ * upstream reference data, not part of the Generation-dept REGISTRY).
+ * `pmis_full_funnel` is per-(date, campaign) and is the one source carrying
+ * real per-campaign spend across BOTH Google and LinkedIn — see
+ * getCampaignSpendMap in ce-queries.ts.
+ */
+export const PMIS_TABLES = {
+  fullFunnel: `${PROJECT_ID}.${CE_DATASET}.pmis_full_funnel`,
+} as const;
+
+/**
  * Builds BigQuery client options based on the credential precedence.
  * Does not expose or log any secret material.
  */
