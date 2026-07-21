@@ -18,9 +18,11 @@ import { ApproveRejectButtons } from "@/components/approve-reject-buttons";
 import {
   getAdCopyDrafts,
   getAudienceAngles,
+  getCampaignSpendMap,
   getKeywordCandidates,
   getKeywordRejects,
   getSegmentsSummary,
+  sortRowsByCampaignSpend,
 } from "@/lib/ce-queries";
 import { listExportFiles, resolveExportsDir } from "@/lib/exports-dir";
 import { formatDate } from "@/lib/format";
@@ -56,21 +58,31 @@ export default async function GenerationPage({
     : "keywords";
   const status = sp.status || undefined;
 
-  const [segments, keywords, drafts, angles, rejects] = await Promise.all([
-    getSegmentsSummary(),
-    getKeywordCandidates({ status }),
-    getAdCopyDrafts({ status }),
-    getAudienceAngles({ status }),
-    getKeywordRejects(),
-  ]);
+  const [segments, keywords, drafts, angles, rejects, campaignSpend] =
+    await Promise.all([
+      getSegmentsSummary(),
+      getKeywordCandidates({ status }),
+      getAdCopyDrafts({ status }),
+      getAudienceAngles({ status }),
+      getKeywordRejects(),
+      getCampaignSpendMap(),
+    ]);
+
+  // Highest-spending campaigns first across all four sections. A stable sort
+  // over each query's own (secondary) order, so within equal/absent spend the
+  // rows keep exactly the order the query returned them in.
+  const sortedKeywords = sortRowsByCampaignSpend(keywords.rows, campaignSpend);
+  const sortedDrafts = sortRowsByCampaignSpend(drafts.rows, campaignSpend);
+  const sortedAngles = sortRowsByCampaignSpend(angles.rows, campaignSpend);
+  const sortedRejects = sortRowsByCampaignSpend(rejects.rows, campaignSpend);
 
   const exportsAvailable = resolveExportsDir() !== null;
   const exportFiles = tab === "rejects" ? listExportFiles() : [];
   const currentPage = Number(sp.page) || 1;
-  const pagedKeywords = pageSlice(keywords.rows, currentPage);
-  const pagedDrafts = pageSlice(drafts.rows, currentPage);
-  const pagedAngles = pageSlice(angles.rows, currentPage);
-  const pagedRejects = pageSlice(rejects.rows, currentPage);
+  const pagedKeywords = pageSlice(sortedKeywords, currentPage);
+  const pagedDrafts = pageSlice(sortedDrafts, currentPage);
+  const pagedAngles = pageSlice(sortedAngles, currentPage);
+  const pagedRejects = pageSlice(sortedRejects, currentPage);
 
   return (
     <div className="space-y-6">

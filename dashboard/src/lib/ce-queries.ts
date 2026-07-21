@@ -1,6 +1,6 @@
 import "server-only";
 
-import { CE_TABLES, safeQuery, type SafeResult } from "@/lib/bq";
+import { CE_TABLES, PMIS_TABLES, safeQuery, type SafeResult } from "@/lib/bq";
 
 /**
  * SERVER-ONLY query layer for the MIS Generation department's `ce_*` tables
@@ -375,20 +375,6 @@ export interface ReviewQueueFilter {
   status?: string;
 }
 
-/**
- * Per-campaign spend (INR) for the latest scored period, from
- * `lead_quality_scores`. LEFT-JOINed into every review-queue query so rows sort
- * highest-spending campaign first — reviewers see the campaigns burning the most
- * money at the top. One row per campaign_name; campaigns with no spend row
- * (never scored yet) sort last via `NULLS LAST`.
- */
-const CAMPAIGN_SPEND_CTE = `campaign_spend AS (
-    SELECT campaign_name, SUM(spend_inr) AS spend_inr
-      FROM \`${CE_TABLES.leadQualityScores}\`
-     WHERE period_end = (SELECT MAX(period_end) FROM \`${CE_TABLES.leadQualityScores}\`)
-     GROUP BY campaign_name
-  )`;
-
 export async function getKeywordCandidates(
   filter: ReviewQueueFilter = {},
 ): Promise<SafeResult<KeywordCandidateRow>> {
@@ -415,21 +401,14 @@ export async function getKeywordCandidates(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `WITH base AS (
-       SELECT run_date, run_id, campaign_name, segment, keyword, match_type, kind,
-              relevance_verdict, relevance_score, filter_reason, source_signal,
-              status, reviewed_by, reviewed_at,
-              keyword_source, avg_monthly_searches, competition, competition_index,
-              top_of_page_bid_low_inr, top_of_page_bid_high_inr, demand_flag
-         FROM \`${CE_TABLES.keywordCandidates}\`
-        WHERE ${clauses.join(" AND ")}
-     ),
-     ${CAMPAIGN_SPEND_CTE}
-     SELECT base.*
-       FROM base
-       LEFT JOIN campaign_spend USING (campaign_name)
-      ORDER BY campaign_spend.spend_inr DESC NULLS LAST,
-               avg_monthly_searches DESC NULLS LAST, relevance_score DESC NULLS LAST, keyword`,
+    `SELECT run_date, run_id, campaign_name, segment, keyword, match_type, kind,
+            relevance_verdict, relevance_score, filter_reason, source_signal,
+            status, reviewed_by, reviewed_at,
+            keyword_source, avg_monthly_searches, competition, competition_index,
+            top_of_page_bid_low_inr, top_of_page_bid_high_inr, demand_flag
+       FROM \`${CE_TABLES.keywordCandidates}\`
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY avg_monthly_searches DESC NULLS LAST, relevance_score DESC NULLS LAST, keyword`,
     params,
   );
   return { rows: result.rows.map(mapKeywordCandidate), error: result.error };
@@ -461,19 +440,13 @@ export async function getAdCopyDrafts(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `WITH base AS (
-       SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
-              headline, primary_text, description, cta, source_signal,
-              status, reviewed_by, reviewed_at, edit_distance,
-              linkedin_format, subject, body
-         FROM \`${CE_TABLES.adCopyDrafts}\`
-        WHERE ${clauses.join(" AND ")}
-     ),
-     ${CAMPAIGN_SPEND_CTE}
-     SELECT base.*
-       FROM base
-       LEFT JOIN campaign_spend USING (campaign_name)
-      ORDER BY campaign_spend.spend_inr DESC NULLS LAST, asset_id`,
+    `SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
+            headline, primary_text, description, cta, source_signal,
+            status, reviewed_by, reviewed_at, edit_distance,
+            linkedin_format, subject, body
+       FROM \`${CE_TABLES.adCopyDrafts}\`
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY asset_id`,
     params,
   );
   return { rows: result.rows.map(mapAdCopyDraft), error: result.error };
@@ -505,18 +478,12 @@ export async function getAudienceAngles(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `WITH base AS (
-       SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
-              angle_name, angle_description, persona, source_signal,
-              status, reviewed_by, reviewed_at
-         FROM \`${CE_TABLES.audienceAngles}\`
-        WHERE ${clauses.join(" AND ")}
-     ),
-     ${CAMPAIGN_SPEND_CTE}
-     SELECT base.*
-       FROM base
-       LEFT JOIN campaign_spend USING (campaign_name)
-      ORDER BY campaign_spend.spend_inr DESC NULLS LAST, asset_id`,
+    `SELECT run_date, run_id, campaign_name, segment, platform, asset_id,
+            angle_name, angle_description, persona, source_signal,
+            status, reviewed_by, reviewed_at
+       FROM \`${CE_TABLES.audienceAngles}\`
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY asset_id`,
     params,
   );
   return { rows: result.rows.map(mapAudienceAngle), error: result.error };
@@ -582,20 +549,86 @@ export async function getKeywordRejects(
   }
 
   const result = await safeQuery<Record<string, unknown>>(
-    `WITH base AS (
-       SELECT run_date, run_id, campaign_name, segment, keyword, reject_reason,
-              relevance_score, source_signal, negative_candidate
-         FROM \`${CE_TABLES.keywordRejects}\`
-        WHERE ${clauses.join(" AND ")}
-     ),
-     ${CAMPAIGN_SPEND_CTE}
-     SELECT base.*
-       FROM base
-       LEFT JOIN campaign_spend USING (campaign_name)
-      ORDER BY campaign_spend.spend_inr DESC NULLS LAST, campaign_name, keyword`,
+    `SELECT run_date, run_id, campaign_name, segment, keyword, reject_reason,
+            relevance_score, source_signal, negative_candidate
+       FROM \`${CE_TABLES.keywordRejects}\`
+      WHERE ${clauses.join(" AND ")}
+      ORDER BY campaign_name, keyword`,
     params,
   );
   return { rows: result.rows.map(mapKeywordReject), error: result.error };
+}
+
+// ---------------------------------------------------------------------------
+// Per-campaign spend (review-queue sort key)
+// ---------------------------------------------------------------------------
+
+/**
+ * Trailing-30-day spend (INR) per real campaign, summed from the PMIS
+ * intelligence table `pmis_full_funnel` (the anomaly-engine's per-(date,
+ * campaign) funnel), keyed by its `campaign` column across BOTH Google and
+ * LinkedIn.
+ *
+ * Why this source and not the `ce_*` tables: `lead_quality_scores` is
+ * segment-grain (its campaign_name is the placeholder "segment:<Segment>", see
+ * generation/lead_quality.py), `asset_performance_feedback` is Phase-3 staged /
+ * unpopulated, and `kw_search_term_perf` is Google-search-only. `pmis_full_funnel`
+ * is the one source with real per-campaign spend on every platform.
+ *
+ * Note the documented breakage in `pmis_full_funnel` is its spend<->leads JOIN
+ * (spend rows and lead rows for one campaign don't merge — see lead_quality.py's
+ * writeup). That does NOT affect us: we read spend ONLY, and the spend figures
+ * themselves are real. `spend > 0` drops the lead-only halves of that split.
+ *
+ * Runs as its own `safeQuery`, decoupled from the review-queue reads: if the
+ * table is unavailable it degrades to an empty map and the queue simply keeps
+ * its existing (secondary) order — a missing spend signal never blanks the
+ * candidate/draft/angle/reject sections.
+ *
+ * Match caveat: this joins on campaign NAME (`pmis_full_funnel.campaign` ->
+ * review-queue `campaign_name`). Spend rows are keyed by the raw Ads campaign
+ * name; any campaign whose name doesn't line up returns no entry and sorts last
+ * via {@link sortRowsByCampaignSpend} (fails safe, never crashes). Coverage
+ * should be spot-checked against live data.
+ */
+export async function getCampaignSpendMap(): Promise<Map<string, number>> {
+  const result = await safeQuery<Record<string, unknown>>(
+    `SELECT campaign, SUM(spend) AS spend_inr
+       FROM \`${PMIS_TABLES.fullFunnel}\`
+      WHERE date > DATE_SUB(
+              (SELECT MAX(date) FROM \`${PMIS_TABLES.fullFunnel}\`),
+              INTERVAL 30 DAY)
+        AND spend > 0
+      GROUP BY campaign`,
+  );
+  const map = new Map<string, number>();
+  for (const r of result.rows) {
+    const name = String(r.campaign ?? "");
+    const spend = num(r.spend_inr);
+    if (name && spend !== null) map.set(name, spend);
+  }
+  return map;
+}
+
+/**
+ * Stable sort placing the highest-spending campaigns first. Rows for campaigns
+ * absent from `spend` (no spend signal) keep their incoming order and fall to
+ * the bottom. The incoming order is each query's own secondary sort, so equal-
+ * or no-spend rows stay grouped exactly as the SQL returned them.
+ */
+export function sortRowsByCampaignSpend<T extends { campaign_name: string }>(
+  rows: T[],
+  spend: Map<string, number>,
+): T[] {
+  return rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const sa = spend.get(a.row.campaign_name) ?? -Infinity;
+      const sb = spend.get(b.row.campaign_name) ?? -Infinity;
+      if (sb !== sa) return sb - sa;
+      return a.index - b.index; // preserve the query's secondary order
+    })
+    .map((x) => x.row);
 }
 
 // ---------------------------------------------------------------------------
