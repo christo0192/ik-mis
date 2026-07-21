@@ -47,6 +47,28 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Right-aligned cell showing a campaign's trailing-30-day spend (INR) — the key
+ * the four sections are sorted by (see getCampaignSpendMap). Campaigns with no
+ * spend row render a muted em dash so it's clear WHY they sort last, rather than
+ * looking like a bug.
+ */
+function SpendCell({ spend }: { spend: number | undefined }) {
+  return (
+    <TableCell className="whitespace-nowrap text-right text-xs tabular-nums">
+      {spend !== undefined ? (
+        <span className="font-medium text-foreground/80">
+          ₹{spend.toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+        </span>
+      ) : (
+        <span className="text-muted" title="No spend in pmis_full_funnel (last 30 days)">
+          —
+        </span>
+      )}
+    </TableCell>
+  );
+}
+
 export default async function GenerationPage({
   searchParams,
 }: {
@@ -140,6 +162,7 @@ export default async function GenerationPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
+                  <TableHead className="text-right">Spend 30d</TableHead>
                   <TableHead>Keyword</TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead className="text-right">Vol/mo</TableHead>
@@ -167,6 +190,7 @@ export default async function GenerationPage({
                         {k.segment ?? "—"}
                       </span>
                     </TableCell>
+                    <SpendCell spend={campaignSpend.get(k.campaign_name)} />
                     <TableCell className="whitespace-nowrap font-medium text-foreground">
                       {k.keyword}
                       {k.match_type ? (
@@ -252,6 +276,7 @@ export default async function GenerationPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
+                  <TableHead className="text-right">Spend 30d</TableHead>
                   <TableHead>Asset</TableHead>
                   <TableHead>Headline / InMail</TableHead>
                   <TableHead>Description / CTA</TableHead>
@@ -274,6 +299,7 @@ export default async function GenerationPage({
                         {d.segment ?? "—"} · {d.platform ?? "—"}
                       </span>
                     </TableCell>
+                    <SpendCell spend={campaignSpend.get(d.campaign_name)} />
                     <TableCell>
                       <Link
                         href={`/generation/${encodeURIComponent(d.segment ?? "Unknown")}/${encodeURIComponent(d.campaign_name)}/${encodeURIComponent(d.asset_id)}`}
@@ -345,6 +371,7 @@ export default async function GenerationPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
+                  <TableHead className="text-right">Spend 30d</TableHead>
                   <TableHead>Asset</TableHead>
                   <TableHead>Angle</TableHead>
                   <TableHead>Persona</TableHead>
@@ -367,6 +394,7 @@ export default async function GenerationPage({
                         {a.segment ?? "—"} · {a.platform ?? "—"}
                       </span>
                     </TableCell>
+                    <SpendCell spend={campaignSpend.get(a.campaign_name)} />
                     <TableCell>
                       <Link
                         href={`/generation/${encodeURIComponent(a.segment ?? "Unknown")}/${encodeURIComponent(a.campaign_name)}/${encodeURIComponent(a.asset_id)}`}
@@ -459,6 +487,7 @@ export default async function GenerationPage({
                 <TableHeader>
                   <TableRow>
                     <TableHead>Campaign</TableHead>
+                  <TableHead className="text-right">Spend 30d</TableHead>
                     <TableHead>Keyword</TableHead>
                     <TableHead>Reject Reason</TableHead>
                     <TableHead>Score</TableHead>
@@ -474,6 +503,7 @@ export default async function GenerationPage({
                           {r.segment ?? "—"}
                         </span>
                       </TableCell>
+                      <SpendCell spend={campaignSpend.get(r.campaign_name)} />
                       <TableCell className="whitespace-nowrap font-medium text-foreground">
                         {r.keyword}
                       </TableCell>
