@@ -124,7 +124,7 @@ export default async function GenerationPage({
         ) : (
           <>
           <TableScroll>
-            <Table>
+            <Table className="[&_td]:align-top">
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
@@ -144,7 +144,7 @@ export default async function GenerationPage({
               <TableBody>
                 {pagedKeywords.items.map((k, i) => (
                   <TableRow key={`${k.campaign_name}-${k.keyword}-${i}`}>
-                    <TableCell className="max-w-52">
+                    <TableCell className="max-w-52 break-words">
                       <Link
                         href={`/generation/${encodeURIComponent(k.segment ?? "Unknown")}/${encodeURIComponent(k.campaign_name)}`}
                         className="font-medium text-foreground hover:text-accent"
@@ -236,7 +236,7 @@ export default async function GenerationPage({
         ) : (
           <>
           <TableScroll>
-            <Table>
+            <Table className="[&_td]:align-top">
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
@@ -251,7 +251,7 @@ export default async function GenerationPage({
               <TableBody>
                 {pagedDrafts.items.map((d, i) => (
                   <TableRow key={`${d.asset_id}-${i}`}>
-                    <TableCell className="max-w-52">
+                    <TableCell className="max-w-52 break-words">
                       <Link
                         href={`/generation/${encodeURIComponent(d.segment ?? "Unknown")}/${encodeURIComponent(d.campaign_name)}`}
                         className="font-medium text-foreground hover:text-accent"
@@ -329,7 +329,7 @@ export default async function GenerationPage({
         ) : (
           <>
           <TableScroll>
-            <Table>
+            <Table className="[&_td]:align-top">
               <TableHeader>
                 <TableRow>
                   <TableHead>Campaign</TableHead>
@@ -344,7 +344,7 @@ export default async function GenerationPage({
               <TableBody>
                 {pagedAngles.items.map((a, i) => (
                   <TableRow key={`${a.asset_id}-${i}`}>
-                    <TableCell className="max-w-52">
+                    <TableCell className="max-w-52 break-words">
                       <Link
                         href={`/generation/${encodeURIComponent(a.segment ?? "Unknown")}/${encodeURIComponent(a.campaign_name)}`}
                         className="font-medium text-foreground hover:text-accent"
@@ -443,7 +443,7 @@ export default async function GenerationPage({
           ) : (
             <>
             <TableScroll>
-              <Table>
+              <Table className="[&_td]:align-top">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Campaign</TableHead>
@@ -456,7 +456,7 @@ export default async function GenerationPage({
                 <TableBody>
                   {pagedRejects.items.map((r, i) => (
                     <TableRow key={`${r.campaign_name}-${r.keyword}-${i}`}>
-                      <TableCell className="max-w-52">
+                      <TableCell className="max-w-52 break-words">
                         <span className="font-medium text-foreground">{r.campaign_name}</span>
                         <span className="mt-0.5 block text-[11px] text-muted">
                           {r.segment ?? "—"}

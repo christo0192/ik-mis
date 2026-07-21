@@ -2,7 +2,7 @@
 
 **Step 1 (Initial):**
 
-Hi \[First Name\], I noticed you explored **Interview Kickstart’s programs** recently. You clearly know your craft \- and many senior professionals like you (across roles such as \[Job Title\]) have **landed roles in MAANG+ companies** by **sharpening interview skills and upskilling with GenAI/Agentic AI.**
+Hi \[First Name\], you’ve spent years getting genuinely good at what you do \- that part isn’t in question. What’s shifting is the bar: senior professionals like you (across roles such as \[Job Title\]) are **landing roles at MAANG+ companies** by **sharpening their interview skills and building real GenAI/Agentic AI depth.**
 
 Would you like to see how the **Transformative GenAI \+ Interview Prep Lab Program** fits your career path?
 
@@ -93,7 +93,7 @@ Talk to you soon\!
 
 ### **Step 1 (Initial)**
 
-Hi \[First Name\], I noticed you explored **Interview Kickstart’s programs** recently. You’ve clearly built real depth in your field \- and many senior professionals like you (across roles such as \[Job Title\]) have **transitioned into AI/ML roles in MAANG+ companies** by **upskilling in the latest AI/ML tech** and **sharpening interview skills.**
+Hi \[First Name\], you’ve built real depth in your field over the years \- and that’s exactly the foundation senior professionals like you (across roles such as \[Job Title\]) are using to **move into AI/ML roles at MAANG+ companies** by **upskilling in the latest AI/ML tech** and **sharpening their interview skills.**
 
 Would you like to see how our **Flagship Machine Learning Program** fits your career path?
 
@@ -191,7 +191,12 @@ Every LinkedIn ad MUST follow three rules:
    wider senior band so an adjacent role (e.g. a VP seeing a TPM ad) doesn't
    dismiss it. `[Job Title]` personalises to the recipient; don't hard-name one role.
 3. Acknowledge their existing competence FIRST — recognise they're already good at
-   what they do before introducing the shift and the pitch.
+   what they do before introducing the shift and the pitch. Keep it specific and
+   earned; never use generic filler like "you clearly know your craft".
+4. Never open like surveillance. This is remarketing, but do NOT call out tracked
+   behaviour ("I noticed you explored our programs recently"). It reads as creepy.
+   Open on competence + the market shift; keep any nod to prior interest light and
+   never say when or where they looked.
 -->
 
 
