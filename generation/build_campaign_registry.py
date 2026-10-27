@@ -105,14 +105,29 @@ which is what lets the dashboard and registry.py read only
 MAX(snapshot_date). main() refuses to write (non-zero exit, no partial
 snapshot) if the prior registry can't be read live, if no platform could be
 fetched, or if the merged snapshot is somehow smaller than the prior one.
+A refresh that DID write but had to carry a REQUESTED platform forward (its
+fetch failed, or its listing tripped the partial-listing guard) exits 4 =
+degraded: run_daily.sh then records a soft failure and the Slack digest
+flags it, because the advanced snapshot_date would otherwise hide a frozen
+platform from every freshness check. When a partial-listing trip is really
+a mass removal, accept it once with --accept-partial <platform> (the missing
+rows are then archived and the guard stops re-firing on them).
 The markdown report goes to generation/staging/ in this mode -- the tracked
 docs/campaign-registry-backfill.md is only overwritten by an explicit
 --out-md.
 
+Backfill mode (no --refresh) is the original one-shot for an EMPTY registry:
+no carry-forward, every classification re-derived from the names, only the
+requested platforms. Because registry.py and the dashboard read only
+MAX(snapshot_date), a live (DRY_RUN=false) backfill over an existing
+registry would replace the latest snapshot with that partial one, so main()
+refuses it -- exit 3 if campaign_registry already has rows, exit 2 if that
+can't be confirmed -- unless --force-backfill is passed. Use --refresh.
+
 Usage:
-    python3 build_campaign_registry.py --from-google
-    python3 build_campaign_registry.py --from-linkedin
-    python3 build_campaign_registry.py --from-google --from-linkedin
+    python3 build_campaign_registry.py --from-google    # backfill: DRY_RUN, or
+    python3 build_campaign_registry.py --from-linkedin  # live only into an
+    python3 build_campaign_registry.py --from-google --from-linkedin  # EMPTY table
     python3 build_campaign_registry.py --from-fixture fixtures/registry_campaigns_raw.json
                                                      # skip both APIs entirely;
                                                      # load raw campaign dicts
@@ -123,6 +138,9 @@ Usage:
     python3 build_campaign_registry.py --refresh --from-google --only-if-stale-days 7
                                                      # no-op unless the latest
                                                      # snapshot is >= 7 days old
+    python3 build_campaign_registry.py --refresh --from-google --from-linkedin \\
+        --accept-partial linkedin                    # archive a real mass removal
+                                                     # the partial guard flagged
 
 DRY_RUN (default true, see config.py) always applies on the BQ write side,
 regardless of --from-fixture -- set DRY_RUN=false for a live BigQuery load.
@@ -1149,7 +1167,10 @@ def render_refresh_markdown(merged: list[dict], report: dict, snapshot_date: dat
 def _main_refresh(args, snapshot_date: date) -> int:
     """--refresh path of main(); see the module docstring. Exit codes:
     0 ok (or skipped as fresh), 1 nothing fetched / write failed,
-    2 prior registry unreadable (no write), 3 shrink guard (no write)."""
+    2 prior registry unreadable (no write), 3 shrink guard (no write),
+    4 DEGRADED -- the complete carry-forward snapshot WAS written, but a
+    requested platform was carried forward (fetch failed or listing looked
+    partial), so its new/changed campaigns are missing from it."""
     ratio = 0.9 if args.min_retain_ratio is None else args.min_retain_ratio
     if not 0 < ratio <= 1:
         log.error("--min-retain-ratio must be in (0, 1] (got %r)", ratio)
@@ -1184,9 +1205,12 @@ def _main_refresh(args, snapshot_date: date) -> int:
     if args.from_fixture:
         live_raw = load_fixture(args.from_fixture)
         fetched = {r.get("platform") for r in live_raw if r.get("platform")}
+        requested = set(fetched)
         log.info("Loaded %d raw campaign(s) from fixture %s (APIs skipped; fetched=%s)",
                  len(live_raw), args.from_fixture, sorted(fetched))
     else:
+        requested = ({"google"} if args.from_google else set()) | \
+                    ({"linkedin"} if args.from_linkedin else set())
         if args.from_google:
             try:
                 google_rows = fetch_google_campaigns()
@@ -1222,13 +1246,22 @@ def _main_refresh(args, snapshot_date: date) -> int:
     now = datetime.now(UTC)
     merged, report = merge_refresh(prior_rows, live_raw, fetched, snapshot_date, now)
     suspect = _suspect_partial_platforms(report, fetched, ratio)
+    accepted = suspect & set(args.accept_partial or ())
+    for p in sorted(accepted):
+        c = report["by_platform"][p]
+        log.warning("%s listing is missing %d of its %d prior not-archived campaign(s) -- "
+                    "accepted via --accept-partial %s: archiving them.",
+                    p, c["disappeared"], c["prior_not_archived"], p)
+    suspect -= accepted
     if suspect:
         for p in sorted(suspect):
             c = report["by_platform"][p]
             log.warning("LOUD WARNING: %s listing looks PARTIAL -- %d of its %d prior "
                         "not-archived campaign(s) are missing (min-retain-ratio %.2f). "
-                        "Carrying %s forward unchanged instead of archiving them.",
-                        p, c["disappeared"], c["prior_not_archived"], ratio, p)
+                        "Carrying %s forward unchanged instead of archiving them. If they "
+                        "really were removed, accept it once with --accept-partial %s "
+                        "(run_daily.sh: REGISTRY_ACCEPT_PARTIAL=%s).",
+                        p, c["disappeared"], c["prior_not_archived"], ratio, p, p, p)
         fetched -= suspect
         live_raw = [r for r in live_raw if r.get("platform") not in suspect]
         if not fetched:
@@ -1246,9 +1279,13 @@ def _main_refresh(args, snapshot_date: date) -> int:
                   len(merged), report["prior_count"], ratio)
         return 3
 
+    # Source per platform: fetched; partial / failed = REQUESTED but carried
+    # forward (-> exit 4 below); carried = not requested this run.
     platforms = sorted({r.get("platform") for r in prior_rows + live_raw if r.get("platform")}
-                       | set(fetched))
-    sources = {p: ("fetched" if p in fetched else "carried") for p in platforms}
+                       | set(fetched) | requested)
+    sources = {p: ("fetched" if p in fetched else "partial" if p in suspect
+                   else "failed" if p in requested else "carried") for p in platforms}
+    degraded = sorted(requested - fetched)
     out_md = (Path(args.out_md) if args.out_md
               else config.STAGING_DIR / f"campaign_registry_refresh_{snapshot_date}.md")
 
@@ -1283,6 +1320,17 @@ def _main_refresh(args, snapshot_date: date) -> int:
              snapshot_date, len(merged), per_platform,
              " ".join(f"{k}={v}" for k, v in totals.items()), needs_attention,
              ",".join(f"{p}:{s}" for p, s in sources.items()))
+
+    # (ix) Degraded -> non-zero, so it is never silent. The snapshot above is
+    # still complete and valid (the chain can run on it), but its advanced
+    # snapshot_date would otherwise hide a platform frozen at its prior state
+    # from every MAX(snapshot_date) freshness check.
+    if degraded:
+        log.error("REGISTRY_REFRESH DEGRADED: requested platform(s) %s carried forward "
+                  "unchanged (%s) -- the snapshot was written, but their new, renamed and "
+                  "status-changed campaigns are missing from it. Exit 4.",
+                  ",".join(degraded), ", ".join(f"{p}:{sources[p]}" for p in degraded))
+        return 4
     return 0
 
 
@@ -1319,7 +1367,57 @@ def parse_args(argv=None):
                     help="--refresh only (default 0.9): refuse to write a snapshot smaller "
                          "than this fraction of the prior one, and carry forward a platform "
                          "whose listing lost more than (1 - ratio) of its prior campaigns.")
+    p.add_argument("--accept-partial", action="append", choices=("google", "linkedin"),
+                    default=None, metavar="PLATFORM",
+                    help="--refresh only, repeatable: this platform's listing really did "
+                         "lose that many campaigns -- archive them instead of tripping the "
+                         "partial-listing guard (and exiting 4). Use for one run, not "
+                         "permanently.")
+    p.add_argument("--force-backfill", action="store_true",
+                    help="Backfill only (no --refresh): allow a LIVE backfill even though "
+                         "campaign_registry already has rows. It replaces today's partition "
+                         "with ONLY the requested platforms, every classification re-derived "
+                         "from the names -- and registry.py/the dashboard read only the "
+                         "latest snapshot. Prefer --refresh.")
     return p.parse_args(argv)
+
+
+def _live_registry_state() -> tuple[int, date | None]:
+    """(row count, MAX(snapshot_date)) of the live campaign_registry. Same
+    client/allowlist as _load_prior_rows_from_bq(). Raises on any failure."""
+    table_id = bq_writer.validate_target("campaign_registry")
+    client = bq_writer.get_client()          # lazy bigquery import inside bq_writer
+    query = f"SELECT COUNT(*) AS n, MAX(snapshot_date) AS latest FROM `{table_id}`"
+    rows = [dict(r.items()) for r in client.query(query).result(timeout=120)]
+    if not rows:
+        return 0, None
+    return int(rows[0].get("n") or 0), _as_date(rows[0].get("latest"))
+
+
+def _live_backfill_guard(force: bool) -> int:
+    """0 if a LIVE backfill may write, else the exit code. A backfill has no
+    carry-forward, so over an existing registry it would make a partial,
+    re-classified snapshot the latest one (see the module docstring)."""
+    if force:
+        log.warning("--force-backfill: skipping the existing-registry check. Today's "
+                    "campaign_registry partition will hold ONLY the platforms requested "
+                    "here, with every classification re-derived from the names.")
+        return 0
+    try:
+        n, latest = _live_registry_state()
+    except Exception as e:  # noqa: BLE001 -- any read failure means "do not write"
+        log.error("BACKFILL aborted: could not confirm campaign_registry is empty (%s) -- "
+                  "refusing a live backfill. If the table really does not exist yet, "
+                  "pass --force-backfill.", e)
+        return 2
+    if n:
+        log.error("BACKFILL refused: campaign_registry already holds %d row(s) (latest "
+                  "snapshot %s). A backfill has no carry-forward and re-derives every "
+                  "classification, and registry.py + the dashboard read only the latest "
+                  "snapshot -- use --refresh instead (or --force-backfill to overwrite "
+                  "deliberately).", n, latest)
+        return 3
+    return 0
 
 
 def main(argv=None) -> int:
@@ -1339,14 +1437,24 @@ def main(argv=None) -> int:
         snapshot_date = date.fromisoformat(bq_writer.run_date_today_ist())
 
     if args.refresh:
+        if args.force_backfill:
+            log.error("--force-backfill only applies without --refresh.")
+            return 1
         return _main_refresh(args, snapshot_date)
     if (args.prior_fixture or args.only_if_stale_days is not None
-            or args.min_retain_ratio is not None):
-        log.error("--prior-fixture/--only-if-stale-days/--min-retain-ratio only apply "
-                  "with --refresh.")
+            or args.min_retain_ratio is not None or args.accept_partial):
+        log.error("--prior-fixture/--only-if-stale-days/--min-retain-ratio/--accept-partial "
+                  "only apply with --refresh.")
         return 1
     if args.out_md is None:
         args.out_md = str(DEFAULT_MD_PATH)
+
+    # A live backfill may only seed an EMPTY registry -- checked before any
+    # ad-platform API call. DRY_RUN only writes the local preview.
+    if not config.DRY_RUN:
+        rc = _live_backfill_guard(args.force_backfill)
+        if rc:
+            return rc
 
     raw_campaigns: list[dict] = []
 

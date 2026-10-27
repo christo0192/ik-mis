@@ -18,7 +18,11 @@
 # keyword routing the same day. It is the ONE fail-soft step: a failure is
 # logged and the chain continues on last week's registry (still a valid,
 # complete snapshot), because a registry hiccup must never cost a day of
-# generation. Every other step stays fail-fast, as below.
+# generation. Every other step stays fail-fast, as below. Fail-soft is never
+# SILENT: the builder exits 4 when it wrote a snapshot but had to carry a
+# requested platform forward (fetch failed, or its listing looked partial),
+# and every non-zero exit lands in SOFT_FAILURES -> the final COMPLETE line
+# AND the Slack digest (notify_slack.py --soft-failure).
 #
 # Fail-fast, unlike the anomaly-engine's own run-daily.sh (which
 # deliberately accumulates failures and keeps going): PLAN.md Step 14 calls
@@ -49,7 +53,10 @@
 # Registry env (defaults): REGISTRY_REFRESH_ENABLED=true,
 # FORCE_REGISTRY_REFRESH=false, REGISTRY_STALE_DAYS=7,
 # REGISTRY_REFRESH_TIMEOUT_S=900 (hard bound so a hung API call can't stall
-# the chain before generate_assets).
+# the chain before generate_assets), REGISTRY_ACCEPT_PARTIAL="" (comma/space
+# list of google/linkedin -> --accept-partial: the partial-listing guard's
+# trip on that platform was a REAL mass removal, archive those campaigns.
+# Set it for one run -- with FORCE_REGISTRY_REFRESH=true -- then unset it).
 
 set -uo pipefail
 
@@ -73,9 +80,11 @@ REGISTRY_REFRESH_ENABLED="${REGISTRY_REFRESH_ENABLED:-true}"
 FORCE_REGISTRY_REFRESH="${FORCE_REGISTRY_REFRESH:-false}"
 REGISTRY_STALE_DAYS="${REGISTRY_STALE_DAYS:-7}"
 REGISTRY_REFRESH_TIMEOUT_S="${REGISTRY_REFRESH_TIMEOUT_S:-900}"
+REGISTRY_ACCEPT_PARTIAL="${REGISTRY_ACCEPT_PARTIAL:-}"
 
-# Names of fail-soft steps that failed this run (reported at the end; the
-# run still exits 0 -- see run_soft_step).
+# Fail-soft steps that failed this run, as "<name>(exit=<rc>)" (reported in
+# the final line and the Slack digest; the run still exits 0 -- see
+# run_soft_step).
 SOFT_FAILURES=()
 
 log() { echo "[run_daily] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
@@ -100,9 +109,10 @@ run_step() {
 
 # run_soft_step <step-name> <command...> -- like run_step, but a non-zero
 # exit is logged and recorded in SOFT_FAILURES and the chain CONTINUES. Only
-# for steps whose failure leaves the previous good state in place (today:
+# for steps whose failure leaves a valid state in place (today:
 # registry_refresh -- a failed refresh writes nothing, so last week's
-# complete snapshot stays current).
+# complete snapshot stays current; a degraded one, exit 4, wrote a complete
+# carry-forward snapshot that is just stale for the carried platform).
 run_soft_step() {
   local name="$1"; shift
   log "[$name] starting (fail-soft): $*"
@@ -110,7 +120,7 @@ run_soft_step() {
   local rc=$?
   if [ "$rc" -ne 0 ]; then
     log "[$name] FAILED (exit=$rc) -- fail-soft, continuing chain"
-    SOFT_FAILURES+=("$name")
+    SOFT_FAILURES+=("$name(exit=$rc)")
   else
     log "[$name] OK"
   fi
@@ -155,6 +165,12 @@ else
   if [ "$IST_WEEKDAY" != "1" ] && [ "$FORCE_REGISTRY_REFRESH" != "true" ]; then
     REG_ARGS+=(--only-if-stale-days "$REGISTRY_STALE_DAYS")
   fi
+  # Operator override for the partial-listing guard (see header). The
+  # builder's argparse rejects anything but google/linkedin (a soft failure).
+  IFS=', ' read -r -a ACCEPT_PARTIAL <<< "$REGISTRY_ACCEPT_PARTIAL"
+  for p in "${ACCEPT_PARTIAL[@]}"; do
+    if [ -n "$p" ]; then REG_ARGS+=(--accept-partial "$p"); fi
+  done
   REG_CMD=("$PYTHON" "$GENDIR/build_campaign_registry.py" "${REG_ARGS[@]}")
   if command -v timeout >/dev/null 2>&1; then
     REG_CMD=(timeout "$REGISTRY_REFRESH_TIMEOUT_S" "${REG_CMD[@]}")
@@ -193,10 +209,15 @@ run_step "instrument" "$PYTHON" "$GENDIR/instrument.py" --window-days "$INSTRUME
 #     elements. Posts for real only when DRY_RUN=false; otherwise prints
 #     the composed message (this run's default, and every dry-run smoke
 #     test's behavior).
+#     Fail-soft failures go into the digest's main message, so a degraded
+#     registry refresh is seen in Slack, not only in the Fly logs.
 NOTIFY_ARGS=()
 if [ "$DRY_RUN" = "false" ]; then
   NOTIFY_ARGS+=(--no-dry-run)
 fi
+for f in "${SOFT_FAILURES[@]}"; do
+  NOTIFY_ARGS+=(--soft-failure "$f")
+done
 run_step "notify_slack" "$PYTHON" "$GENDIR/notify_slack.py" "${NOTIFY_ARGS[@]}"
 
 if [ "${#SOFT_FAILURES[@]}" -gt 0 ]; then

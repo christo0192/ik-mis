@@ -32,6 +32,10 @@ Asserts:
        fail-soft).
   (d7) every OTHER step is still fail-fast (a failing generate_assets stops
        the chain with its exit code).
+  (d8) a degraded refresh (builder exit 4: snapshot written, a requested
+       platform carried forward) is a recorded soft failure -- final line
+       and notify_slack --soft-failure; a clean run passes none.
+  (d9) REGISTRY_ACCEPT_PARTIAL -> --accept-partial per listed platform.
   (e1-e4) entrypoint.sh: LINKEDIN_ENV_B64 unset -> Google-only log, no file;
        valid -> file materialized byte-exact and never echoed; undecodable
        -> WARN, no file, container continues; a missing REQUIRED secret
@@ -166,6 +170,11 @@ def _builder_args(calls: list[str]) -> str:
     return calls[i] if i >= 0 else ""
 
 
+def _notify_args(calls: list[str]) -> str:
+    i = _index(calls, "notify_slack.py")
+    return calls[i] if i >= 0 else ""
+
+
 def test_syntax():
     for script in (RUN_DAILY, ENTRYPOINT):
         proc = subprocess.run([_bash(), "-n", _posix(script)], capture_output=True, text=True,
@@ -183,8 +192,11 @@ def test_run_daily(sb: Sandbox):
           f"(d1/d2) every step ran, in order, with generate_assets..notify_slack "
           f"AFTER the failed builder (indices {order})")
     check("[registry_refresh] FAILED (exit=1) -- fail-soft, continuing chain" in out
-          and "fail-soft step(s) FAILED: registry_refresh" in out,
+          and "fail-soft step(s) FAILED: registry_refresh(exit=1)" in out,
           "(d1) the soft failure is logged at the step and in the final COMPLETE line")
+    check("--soft-failure registry_refresh(exit=1)" in _notify_args(calls),
+          f"(d1) the soft failure is passed to the Slack digest "
+          f"(notify args: {_notify_args(calls)!r})")
     args = _builder_args(calls)
     check("--refresh --from-google" in args and "--from-linkedin" not in args,
           f"(d3) no linkedin-ads/.env -> Google-only refresh (args: {args!r})")
@@ -200,6 +212,29 @@ def test_run_daily(sb: Sandbox):
           f"(d3) linkedin-ads/.env present -> --from-linkedin passed (args: {args!r})")
     check("[registry_refresh] OK" in out and "COMPLETE -- all steps ok" in out,
           "(d3) a successful refresh logs OK and the run completes 'all steps ok'")
+    check("--soft-failure" not in _notify_args(calls),
+          "(d3) a clean run passes no --soft-failure to the Slack digest")
+    check("--accept-partial" not in args,
+          "(d9) REGISTRY_ACCEPT_PARTIAL unset -> no --accept-partial")
+
+    # (d8) builder exit 4 (snapshot written, a requested platform carried
+    #      forward) is NOT silent: soft failure, final line, Slack digest
+    rc, out, calls, _ = sb.run_daily(STUB_FAIL_RC="4")
+    check(rc == 0 and "[registry_refresh] FAILED (exit=4)" in out
+          and "fail-soft step(s) FAILED: registry_refresh(exit=4)" in out
+          and "COMPLETE -- all steps ok" not in out
+          and "--soft-failure registry_refresh(exit=4)" in _notify_args(calls),
+          f"(d8) a degraded refresh (exit 4) is a recorded soft failure surfaced in the "
+          f"final line and the Slack digest (rc={rc}, notify={_notify_args(calls)!r})")
+
+    # (d9) REGISTRY_ACCEPT_PARTIAL -> one --accept-partial per platform, blanks skipped
+    _rc, _out, calls, _ = sb.run_daily(STUB_FAIL_MATCH="",
+                                       REGISTRY_ACCEPT_PARTIAL="linkedin,, google")
+    args = _builder_args(calls)
+    check("--accept-partial linkedin --accept-partial google" in args
+          and "--accept-partial  " not in args and not args.endswith("--accept-partial"),
+          f"(d9) REGISTRY_ACCEPT_PARTIAL='linkedin,, google' -> two --accept-partial "
+          f"flags, no empty one (args: {args!r})")
     sb.linkedin_env(False)
 
     # (d4) Monday IST / FORCE -> full refresh; custom stale threshold

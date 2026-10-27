@@ -1393,12 +1393,37 @@ archiving them. Completeness matters because the dashboard and
 `registry.py` read only `MAX(snapshot_date)`: an incomplete snapshot would
 blank every campaign missing from it.
 
+**Degraded = exit 4 (written, but not silent).** When a platform that was
+requested (`--from-google` / `--from-linkedin`, or present in the fixture)
+is carried forward -- its fetch raised (expired refresh token, 426 fallback
+exhausted, 5xx, bad body) or its listing tripped the partial guard -- the
+complete carry-forward snapshot is still written, but the builder logs
+`REGISTRY_REFRESH DEGRADED` and exits 4. Every carried row gets the new
+`snapshot_date`, so without this the frozen platform would look fresh to
+every `MAX(snapshot_date)` check. `run_daily.sh` records it in
+`SOFT_FAILURES` (`registry_refresh(exit=4)`) and passes it to
+`notify_slack.py --soft-failure`, which flags it in the digest's main
+message. If a partial-guard trip is a REAL mass removal, accept it for one
+run with `--accept-partial <platform>` (in `run_daily.sh`:
+`REGISTRY_ACCEPT_PARTIAL=<platform>` plus `FORCE_REGISTRY_REFRESH=true`,
+then unset both): the missing campaigns are archived, so the guard stops
+re-firing on them.
+
+**Backfill mode is for an EMPTY registry only.** Without `--refresh`, a
+live (`DRY_RUN=false`) run refuses to write once `campaign_registry` has
+any row (exit 3; exit 2 if it can't check), because a backfill has no
+carry-forward: it would make a one-platform, re-classified snapshot the
+latest one. `--force-backfill` overrides this deliberately. DRY_RUN
+backfills (local preview only) are unaffected.
+
 **Report.** `generation/staging/campaign_registry_refresh_<date>.md` (New
 since last snapshot / Renamed / Status changes / Disappeared (archived) /
 Manual overrides kept, then the usual needs-attention + all-campaigns
 tables) -- the tracked `docs/campaign-registry-backfill.md` is only touched
 with an explicit `--out-md`. One summary log line:
-`REGISTRY_REFRESH snapshot=... total=... google=... linkedin=... new=... renamed=... status_changed=... disappeared=... overrides_kept=... carried_unfetched=... needs_attention=... sources=google:fetched,linkedin:carried`.
+`REGISTRY_REFRESH snapshot=... total=... google=... linkedin=... new=... renamed=... status_changed=... disappeared=... overrides_kept=... carried_unfetched=... needs_attention=... sources=google:fetched,linkedin:carried`
+(per platform: `fetched`; `failed` / `partial` = requested but carried
+forward, exit 4; `carried` = not requested this run).
 
 **Cadence (`run_daily.sh`).** Full refresh on Mondays IST or with
 `FORCE_REGISTRY_REFRESH=true`; on every other day the step passes
@@ -1415,6 +1440,7 @@ the chain's only fail-soft step.
 | `FORCE_REGISTRY_REFRESH` | `false` | `true` = refresh regardless of weekday/staleness |
 | `REGISTRY_STALE_DAYS` | `7` | catch-up threshold for non-Monday runs |
 | `REGISTRY_REFRESH_TIMEOUT_S` | `900` | hard bound on the builder |
+| `REGISTRY_ACCEPT_PARTIAL` | _(empty)_ | `google` / `linkedin` (comma list) -> `--accept-partial`; one run only, see "Degraded" above |
 | `LINKEDIN_API_VERSION` | `202610` | `LinkedIn-Version` header (YYYYMM). On a 426 the builder probes the current UTC month back 12 months (at most 13 calls), uses the first 2xx and logs `bump LINKEDIN_API_VERSION` |
 
 **LinkedIn is optional.** It is fetched only when
@@ -1425,8 +1451,9 @@ Without it the refresh is Google-only and every LinkedIn row is carried
 forward unchanged. The builder refreshes the access token in memory on a
 401, so only the refresh token needs to stay valid (probed 2026-10-27: about
 148 days left, i.e. until about 2027-03-24 -- `ops/freshness_watchdog.py`
-tracks it); when it lapses, the LinkedIn fetch fails and LinkedIn is carried
-forward with a warning.
+tracks it); when it lapses, the LinkedIn fetch fails, LinkedIn is carried
+forward and the refresh exits 4 (degraded -- flagged in Slack on every
+weekly refresh until fixed).
 
 ```bash
 DRY_RUN=true python generation/build_campaign_registry.py --refresh \
@@ -1435,7 +1462,7 @@ DRY_RUN=true python generation/build_campaign_registry.py --refresh \
   --snapshot-date 2026-11-02        # offline: fixtures in, staging preview + report out
 ```
 
-Tests: `tests_registry.py` (merge cases r1-r10, CLI cases c1-c9, the
+Tests: `tests_registry.py` (merge cases r1-r10, CLI cases c1-c10, the
 LinkedIn-Version fallback with mocked HTTP, the latest-snapshot query) and
 `tests_run_daily.py` (runs the real `run_daily.sh` against a stub `python`:
 fail-soft ordering, the `--from-linkedin` / `--only-if-stale-days` flags,

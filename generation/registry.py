@@ -193,11 +193,14 @@ def _load_from_bq() -> dict:
     name alive forever as a ghost entry frozen at its July status (3 Google
     renames exist today), and it disagreed with the dashboard, which reads
     MAX(snapshot_date) only (ce-queries.ts). Latest-only is safe because
-    build_campaign_registry.py --refresh only ever writes COMPLETE snapshots
-    (every prior key carried forward, a shrink guard refusing anything
-    smaller). Duplicate campaign_names inside one snapshot (3 LinkedIn names
-    have 2 ids each) still collapse last-wins in _rows_to_registry, as
-    before."""
+    build_campaign_registry.py only ever writes COMPLETE snapshots live:
+    --refresh carries every prior key forward (a shrink guard refusing
+    anything smaller), and a live backfill (no --refresh) refuses to write
+    once the table has any row unless --force-backfill is passed -- so a
+    one-platform backfill can't silently become the latest snapshot
+    (tests_registry.py c10). Duplicate campaign_names inside one snapshot
+    (3 LinkedIn names have 2 ids each) still collapse last-wins in
+    _rows_to_registry, as before."""
     table_id = bq_writer.validate_target("campaign_registry")
     client = bq_writer.get_client()          # lazy bigquery import inside bq_writer
     query = f"""

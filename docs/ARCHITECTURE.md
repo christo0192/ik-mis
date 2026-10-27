@@ -209,8 +209,10 @@ Once a week (Mondays IST, or on any day the registry's latest snapshot is more t
 old) it also re-lists every live campaign and writes a fresh, *complete* registry
 snapshot: new campaigns auto-classified, renames and status changes picked up, hand-made
 classifications carried forward, and any platform it couldn't reach carried over
-unchanged rather than dropped. That step is the one that's allowed to fail quietly —
-last week's snapshot is still whole, so the day's generation goes on. (Until 2026-10-27
+unchanged rather than dropped. That step is the one that's allowed to fail without
+stopping the day — last week's snapshot is still whole, so the day's generation goes on —
+but never silently: a failure, or a platform it had to carry over, is flagged in the run
+log and in the Slack digest. (Until 2026-10-27
 the registry was a one-shot July backfill that never refreshed.) Then it wakes its
 strategist: one model
 call that reads the week's market signals and the quality-lead math, and proposes keywords

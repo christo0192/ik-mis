@@ -34,9 +34,17 @@ fw = importlib.import_module("freshness_watchdog")
 
 REPO = HERE.parent
 WORKFLOW = REPO / ".github" / "workflows" / "freshness-watchdog.yml"
+CI_WORKFLOW = REPO / ".github" / "workflows" / "ci.yml"
 D = date.fromisoformat
 TODAY = D("2026-10-27")            # a Tuesday
 MONDAY = D("2026-10-26")
+
+# Synthetic expiry calendars. No value assertion reads a REAL EXPIRIES date:
+# renewing a deadline is a one-line date edit (the entry's action text and
+# ops/README.md say so) and must never turn this suite red. The real list
+# gets structure-only and date-agnostic checks (see "expiry calendar").
+CAL = [fw.Expiry("Tok", D("2027-03-24"), "do X")]                  # 148d after TODAY
+CAL2 = [fw.Expiry("Later", D("2027-08-01"), "do Y"), *CAL]        # unsorted on purpose
 
 
 def check(cond, msg):
@@ -251,7 +259,7 @@ check(reg.lag_days == 115 and reg.late_since == D("2026-07-13") and reg.days_lat
 check(real[0].key == "SIP_pattern_rag.ce_campaign_registry",
       "(e) breaches sorted longest-late first within alert")
 real_msg = fw.render_message(real, TODAY, len(fw.SPECS), False,
-                             expiries=fw.expiry_status(TODAY), mention="<!here>")
+                             expiries=fw.expiry_status(TODAY, CAL), mention="<!here>")
 check(real_msg.startswith("<!here> :rotating_light: Freshness watchdog -- 7 table(s) LATE "
                           "(2026-10-27 IST)"),
       "(e) header pages: Market Research is on day 35/28 (multiples of 7)")
@@ -343,22 +351,37 @@ check(fw.render_message([], TODAY, 21, False) is None, "(h) no breaches, no hear
 hb = fw.render_message([], TODAY, 21, True)
 check(hb == ":white_check_mark: Freshness watchdog -- all 21 tables within SLA (2026-10-27 IST)",
       "(h) heartbeat text exact")
-hb2 = fw.render_message([], TODAY, 21, True, expiries=fw.expiry_status(TODAY))
-check(hb2.startswith(":white_check_mark:") and "LinkedIn OAuth refresh token on 2027-03-24 (148d)" in hb2
-      and "<!here>" not in hb2, "(h) heartbeat names the next calendar deadline and never pages")
+hb2 = fw.render_message([], TODAY, 21, True, expiries=fw.expiry_status(TODAY, CAL2))
+check(hb2.startswith(":white_check_mark:") and "Next calendar deadline: Tok on 2027-03-24 (148d)." in hb2
+      and "Later" not in hb2 and "<!here>" not in hb2,
+      "(h) heartbeat names the soonest calendar deadline and never pages")
 
 # ---------------------------------------------------------------------------
 # expiry calendar
 # ---------------------------------------------------------------------------
+# The REAL calendar: structure and date-agnostic checks only, so renewing an
+# entry (editing its date) or adding one keeps this suite green.
+check(fw.EXPIRIES and all(type(e.expires) is date and e.name.strip() and "update this date" in e.action
+                          for e in fw.EXPIRIES),
+      "expiry: every real entry has a name, a plain date (not a datetime) and an action "
+      "ending in 'update this date'")
+check(len({e.name for e in fw.EXPIRIES}) == len(fw.EXPIRIES), "expiry: real entry names are unique")
 li = next(e for e in fw.EXPIRIES if e.name == "LinkedIn OAuth refresh token")
-check(li.expires == D("2027-03-24") and "get_token.py" in li.action and "LINKEDIN_ENV_B64" in li.action
+check("get_token.py" in li.action and "LINKEDIN_ENV_B64" in li.action
       and "ik-anomaly" in li.action and "ik-ad-generator" in li.action and "--stage" in li.action,
       "expiry: LinkedIn refresh token entry with the re-auth action")
+nxt = min(fw.EXPIRIES, key=lambda e: (e.expires, e.name))      # expiry_status() order
+quiet = nxt.expires - timedelta(days=100)                       # every real entry >= 100d out
+hb_real = fw.render_message([], quiet, 21, True, expiries=fw.expiry_status(quiet))
+check(f"Next calendar deadline: {fw._esc(nxt.name)} on {nxt.expires} (100d)." in hb_real,
+      "expiry: the real calendar renders; the heartbeat names its soonest entry")
 st = fw.expiry_status(TODAY)
-check([s.days_left for s in st] == sorted(s.days_left for s in st), "expiry: statuses soonest first")
-check(next(s for s in st if s.name == li.name).days_left == 148, "expiry: 148 days left on 2026-10-27")
-check(fw.due_expiries(st) == [], "expiry: nothing due on 2026-10-27")
-cal = [fw.Expiry("Tok", D("2027-03-24"), "do X")]
+check([s.days_left for s in st] == sorted(s.days_left for s in st), "expiry: real statuses soonest first")
+st2 = fw.expiry_status(TODAY, CAL2)
+check([s.name for s in st2] == ["Tok", "Later"] and st2[0].days_left == 148,
+      "expiry: statuses soonest first; 148 days left on 2026-10-27")
+check(fw.due_expiries(st2) == [], "expiry: nothing due 148d out")
+cal = CAL
 for day, due_n, expired, late in [("2027-02-21", 0, False, 0), ("2027-02-22", 1, False, 0),
                                   ("2027-03-23", 1, False, 0), ("2027-03-24", 1, True, 1),
                                   ("2027-03-26", 1, True, 3)]:
@@ -389,7 +412,10 @@ check("A&lt;b&gt;&amp;c" in esc, "free text is escaped for Slack mrkdwn")
 # ---------------------------------------------------------------------------
 # (i) size cap
 # ---------------------------------------------------------------------------
-cal_due = fw.expiry_status(D("2027-07-20"))              # both real entries due
+# Every real entry's text (it sets the size) on synthetic dates, alternately
+# due in 5d and EXPIRED 3d ago -- a renewal can never make this nothing-due.
+cal_due = fw.expiry_status(TODAY, [fw.Expiry(e.name, TODAY + timedelta(days=-3 if i % 2 else 5), e.action)
+                                   for i, e in enumerate(fw.EXPIRIES)])
 for label, latest_map in [("all SPECS 100 days late", all_at(100)), ("all SPECS NO DATA", {})]:
     m = fw.render_message(fw.evaluate(latest_map, TODAY), TODAY, len(fw.SPECS), False,
                           expiries=cal_due, mention="<!here>",
@@ -552,12 +578,16 @@ log_handler = logging.StreamHandler(log_buf)
 fw.log.addHandler(log_handler)
 fw.log.propagate = False              # capture main()'s logs here, keep the PASS list readable
 real_build, real_fetch, real_post = fw.build_client, fw.fetch_latest, fw.post_slack
+real_expiry_status = fw.expiry_status
 calls = {"post": [], "fetch": 0}
 
 
-def patch(latest=None, fetch_exc=None, post_exc=None):
+def patch(latest=None, fetch_exc=None, post_exc=None, calendar=CAL):
     calls["post"].clear()
     calls["fetch"] = 0
+    # main() reads the module calendar: pin it (synthetic by default) so an
+    # EXPIRIES renewal or a new entry can never flip a main() assertion.
+    fw.expiry_status = lambda today, expiries=calendar: real_expiry_status(today, expiries)
 
     def fake_fetch(client, specs=fw.SPECS, project=None):
         calls["fetch"] += 1
@@ -669,12 +699,22 @@ for value, expect in [(None, "<!here> "), ("", ":rotating_light:"), ("none", ":r
     run_main(["--today", "2026-10-27"])
     check(calls["post"][0][2].startswith(expect), f"(l) WATCHDOG_MENTION={value!r} -> starts {expect!r}")
 
+# main() wires the REAL EXPIRIES (date-agnostic: 10 days before its soonest entry).
+warn_day = nxt.expires - timedelta(days=10)
+reset_env(SLACK_BOT_TOKEN=TOKEN, SLACK_CHANNEL_ID="C123")
+patch(latest={k: warn_day for k in keys}, calendar=fw.EXPIRIES)
+rc, _ = run_main(["--today", warn_day.isoformat()])
+check(rc == 0 and len(calls["post"]) == 1 and "Expiry calendar" in calls["post"][0][2]
+      and f"*{fw._esc(nxt.name)}* expires {nxt.expires} (in 10d)" in calls["post"][0][2],
+      "(l) main() reads the real EXPIRIES: its soonest entry posts 10d ahead")
+
 all_out = log_buf.getvalue()
 check(TOKEN not in all_out and "[REDACTED]" in all_out,
       "(l) the Slack token never appears in logs (redacted from a third-party error)")
 check("google.cloud.bigquery" not in sys.modules, "(l) main() never imported google-cloud-bigquery")
 
 fw.build_client, fw.fetch_latest, fw.post_slack = real_build, real_fetch, real_post
+fw.expiry_status = real_expiry_status
 fw.log.removeHandler(log_handler)
 fw.log.propagate = True
 reset_env()
@@ -695,9 +735,27 @@ if WORKFLOW.exists():
           "workflow: every ${{ }} expression sits in an env: mapping, none inside run:")
     for name in ("WATCHDOG_BQ_SA_JSON", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"):
         check(f"{name}: ${{{{ secrets.{name} }}}}" in wf, f"workflow: secret {name} passed via env")
-    check(wf.index("python ops/tests_freshness_watchdog.py") < wf.index("python ops/freshness_watchdog.py"),
-          "workflow: unit tests run before the watchdog")
+    check("run: python ops/freshness_watchdog.py" in wf, "workflow: runs the watchdog")
+    gating = [ln for ln in wf.splitlines()
+              if "tests_freshness_watchdog" in ln and not ln.lstrip().startswith("#")]
+    check(gating == [], "workflow: the live run is NOT gated on the unit tests (a red test must "
+                        "never switch alerting off; ci.yml runs them)")
 else:
     print(f"SKIP: workflow drift guards ({WORKFLOW} not found)")
+
+if CI_WORKFLOW.exists():
+    ci = CI_WORKFLOW.read_text(encoding="utf-8")
+    ci_code = "\n".join(ln for ln in ci.splitlines() if not ln.lstrip().startswith("#"))
+    check("run: python ops/tests_freshness_watchdog.py" in ci_code,
+          "ci.yml: runs these unit tests on every PR and push to main")
+    # `bash -n a b` parses only a (b becomes $1), so every `bash -n` gets one file.
+    multi = [m.group(0) for m in re.finditer(r"bash -n((?:[ \t]+[^\s;|&]+)+)", ci_code)
+             if len(m.group(1).split()) > 1]
+    check(multi == [], f"ci.yml: every `bash -n` checks exactly one file {multi}")
+    loop = re.search(r'for f in ([^;\n]+); do bash -n "\$f"', ci_code)
+    check(loop is not None and {"run_daily.sh", "fly-deploy/entrypoint.sh"} <= set(loop.group(1).split()),
+          "ci.yml: shell syntax checks both run_daily.sh and fly-deploy/entrypoint.sh")
+else:
+    print(f"SKIP: ci.yml drift guards ({CI_WORKFLOW} not found)")
 
 print("\nAll freshness watchdog tests passed.")

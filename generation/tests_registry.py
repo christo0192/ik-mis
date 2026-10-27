@@ -44,8 +44,14 @@ fixtures/registry_prior_snapshot.json + registry_refresh_live_raw.json:
       a steady-state re-merge and the null-id dedupe.
   (c1-c9) main(['--refresh', ...]) end to end in DRY_RUN: report sections +
       summary line, staleness gate, shrink guard (exit 3), per-platform
-      fail-soft, nothing fetched (exit 1), prior unreadable live (exit 2),
-      backfill flags unchanged, partial-listing guard, arg validation.
+      fail-soft (a REQUESTED platform carried forward -> snapshot written but
+      exit 4 = degraded; an unrequested one -> exit 0), nothing fetched
+      (exit 1), prior unreadable live (exit 2), backfill flags unchanged,
+      partial-listing guard (exit 4) + --accept-partial (archives, exit 0,
+      no re-trip next week), arg validation.
+  (c10) a LIVE backfill (no --refresh) refuses an existing registry (exit 3,
+      before any API call), fails closed when it can't check (exit 2), still
+      seeds an empty one, and --force-backfill overrides -- fake BQ client.
   (l1-l6) LINKEDIN_API_VERSION env override + the bounded 426 auto-fallback,
       against a mocked http.client (no network).
   (q1-q2) the BQ query shapes: registry.py reads ONLY MAX(snapshot_date);
@@ -651,7 +657,9 @@ def test_refresh_cli():
             bcr.merge_refresh = orig_merge
             bq_writer.write_rows = orig_write
 
-        # (c4) per-platform fail-soft: LinkedIn raises, Google works -> LinkedIn carried
+        # (c4) per-platform fail-soft: LinkedIn raises, Google works -> LinkedIn
+        #      carried, the snapshot IS written, but the run exits 4 (degraded)
+        #      so run_daily.sh records a soft failure -- never a silent exit 0
         orig_fl = bcr.fetch_linkedin_campaigns
         bcr.fetch_google_campaigns = lambda: [
             r for r in bcr.load_fixture(LIVE_FIXTURE) if r["platform"] == "google"]
@@ -659,19 +667,38 @@ def test_refresh_cli():
             RuntimeError("LinkedIn API error (426): version not active"))
         try:
             _clean()
+            cap.records.clear()
             rc = bcr.main(["--refresh", "--from-google", "--from-linkedin", "--prior-fixture",
                            PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
                            "--out-md", str(md_path)])
             rows = json.loads(preview_path.read_text(encoding="utf-8"))["rows"]
             li = _by_id([r for r in rows if r["platform"] == "linkedin"])
-            check(rc == 0 and sorted(li) == [("linkedin", "7001"), ("linkedin", "7002"),
+            check(rc == 4 and sorted(li) == [("linkedin", "7001"), ("linkedin", "7002"),
                                              ("linkedin", "7003")]
                   and li[("linkedin", "7002")]["status"] == "paused",
-                  f"(c4) LinkedIn fetch failure -> exit 0, its 3 prior rows carried "
-                  f"forward unchanged (rc={rc}, linkedin={sorted(li)})")
+                  f"(c4) LinkedIn fetch failure -> snapshot written with its 3 prior rows "
+                  f"carried forward unchanged, exit 4 = degraded (rc={rc}, "
+                  f"linkedin={sorted(li)})")
             check(_by_id(rows)[("google", "9001")]["status"] == "paused"
                   and cap.has("carrying LinkedIn forward"),
                   "(c4) Google still refreshed; the LinkedIn failure is logged as carried forward")
+            summary = [r for r in cap.records if r.startswith("REGISTRY_REFRESH snapshot=")]
+            check(len(summary) == 1 and summary[0].endswith("sources=google:fetched,linkedin:failed")
+                  and cap.has("REGISTRY_REFRESH DEGRADED: requested platform(s) linkedin"),
+                  f"(c4) the summary marks linkedin:failed and a DEGRADED error is logged "
+                  f"(got {summary})")
+
+            # (c4b) LinkedIn NOT requested (creds absent in run_daily.sh) -> carried, exit 0
+            _clean()
+            cap.records.clear()
+            rc = bcr.main(["--refresh", "--from-google", "--prior-fixture", PRIOR_FIXTURE,
+                           "--snapshot-date", str(REFRESH_DATE), "--out-md", str(md_path)])
+            summary = [r for r in cap.records if r.startswith("REGISTRY_REFRESH snapshot=")]
+            check(rc == 0 and len(summary) == 1
+                  and summary[0].endswith("sources=google:fetched,linkedin:carried")
+                  and not cap.has("DEGRADED"),
+                  f"(c4b) an unrequested platform carried forward is not degraded -> exit 0 "
+                  f"(rc={rc}, {summary})")
 
             # (c5) both platforms fail -> exit 1, nothing written
             bcr.fetch_google_campaigns = lambda: (_ for _ in ()).throw(
@@ -718,10 +745,13 @@ def test_refresh_cli():
         # (c7) backfill mode is unchanged (block (f) above passed on it); the
         #      refresh-only flags are refused without --refresh
         for extra in (["--prior-fixture", PRIOR_FIXTURE], ["--only-if-stale-days", "7"],
-                      ["--min-retain-ratio", "0.5"]):
+                      ["--min-retain-ratio", "0.5"], ["--accept-partial", "google"]):
             rc = bcr.main(["--from-fixture", RAW_CAMPAIGNS_FIXTURE, *extra,
                            "--out-md", str(md_path)])
             check(rc == 1, f"(c7) {extra[0]} without --refresh exits 1 (got {rc})")
+        rc = bcr.main(["--refresh", "--force-backfill", "--from-fixture", LIVE_FIXTURE,
+                       "--prior-fixture", PRIOR_FIXTURE, "--out-md", str(md_path)])
+        check(rc == 1, f"(c7) --force-backfill with --refresh exits 1 (got {rc})")
 
         # (c8) partial-listing guard: a Google listing missing most known ids
         #      is carried forward instead of archiving them
@@ -729,32 +759,134 @@ def test_refresh_cli():
                    if r["platform"] == "linkedin" or r["campaign_id"] in ("9001", "9002", "9100")]
         partial_path = config.STAGING_DIR / "test_registry_partial_live.json"
         partial_path.write_text(json.dumps(partial), encoding="utf-8")
+        accepted_prior = config.STAGING_DIR / "test_registry_accepted_prior.json"
         try:
             _clean()
+            cap.records.clear()
             rc = bcr.main(["--refresh", "--from-fixture", str(partial_path), "--prior-fixture",
                            PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
                            "--out-md", str(md_path)])
             rows = _by_id(json.loads(preview_path.read_text(encoding="utf-8"))["rows"])
-            check(rc == 0 and rows[("google", "9004")]["status"] == "active"
+            check(rc == 4 and rows[("google", "9004")]["status"] == "active"
                   and rows[("google", "9001")]["status"] == "active"
                   and ("google", "9100") not in rows and ("linkedin", "7004") in rows
                   and len(rows) == 17,
                   f"(c8) partial Google listing -> Google carried forward unchanged, "
-                  f"LinkedIn still refreshed (rc={rc}, rows={len(rows)})")
-            check(cap.has("google listing looks PARTIAL"),
-                  "(c8) the partial-listing guard logs a loud warning")
+                  f"LinkedIn still refreshed, exit 4 = degraded (rc={rc}, rows={len(rows)})")
+            check(cap.has("google listing looks PARTIAL") and cap.has("--accept-partial google")
+                  and cap.has("sources=google:partial,linkedin:fetched"),
+                  "(c8) the partial-listing guard logs a loud warning naming the "
+                  "--accept-partial override, and the summary marks google:partial")
+
+            # (c8b) --accept-partial google: the disappearance is real -> archived, exit 0
+            _clean()
+            cap.records.clear()
+            rc = bcr.main(["--refresh", "--from-fixture", str(partial_path), "--prior-fixture",
+                           PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
+                           "--accept-partial", "google", "--out-md", str(md_path)])
+            snap = json.loads(preview_path.read_text(encoding="utf-8"))["rows"]
+            rows = _by_id(snap)
+            check(rc == 0 and rows[("google", "9004")]["status"] == "archived"
+                  and ("google", "9100") in rows and not cap.has("looks PARTIAL")
+                  and cap.has("accepted via --accept-partial google"),
+                  f"(c8b) --accept-partial google archives the missing Google campaigns, "
+                  f"registers the new one, exit 0 (rc={rc})")
+
+            # (c8c) ...and the guard does not re-fire next week on the same listing
+            accepted_prior.write_text(json.dumps(snap), encoding="utf-8")
+            _clean()
+            cap.records.clear()
+            rc = bcr.main(["--refresh", "--from-fixture", str(partial_path), "--prior-fixture",
+                           str(accepted_prior), "--snapshot-date", "2026-11-09",
+                           "--out-md", str(md_path)])
+            check(rc == 0 and not cap.has("looks PARTIAL"),
+                  f"(c8c) once accepted, the same listing next week no longer trips the "
+                  f"partial-listing guard (rc={rc})")
         finally:
             partial_path.unlink()
+            if accepted_prior.exists():
+                accepted_prior.unlink()
 
         # (c9) argument validation
         for bad in ("0", "1.5"):
             rc = bcr.main(["--refresh", "--from-fixture", LIVE_FIXTURE, "--prior-fixture",
                            PRIOR_FIXTURE, "--min-retain-ratio", bad, "--out-md", str(md_path)])
             check(rc == 1, f"(c9) --min-retain-ratio {bad} is rejected with exit 1 (got {rc})")
+
+        # (c10) a LIVE backfill (no --refresh) may only seed an EMPTY registry:
+        #       registry.py reads only MAX(snapshot_date), so a one-platform
+        #       backfill over the existing registry would hide the other platform
+        test_live_backfill_guard(md_path)
     finally:
         bcr.log.removeHandler(cap)
         if md_path.exists():
             md_path.unlink()
+
+
+def test_live_backfill_guard(md_path):
+    """(c10) DRY_RUN=false backfill against a fake BQ client + a recording
+    write_rows -- no BigQuery, no ad API."""
+    bcr = build_campaign_registry
+    orig = (config.DRY_RUN, bq_writer.get_client, bq_writer.write_rows,
+            bcr.fetch_google_campaigns)
+    writes, api_calls, clients = [], [], []
+    cap = _LogCapture()
+    bcr.log.addHandler(cap)
+
+    def _client(rows):
+        fake = _FakeBQ(rows)
+
+        def get():
+            clients.append(fake)
+            return fake
+        return get
+
+    try:
+        config.DRY_RUN = False
+        bq_writer.write_rows = lambda table, rows: writes.append((table, rows)) or len(rows)
+        bcr.fetch_google_campaigns = lambda: api_calls.append("google") or [
+            r for r in bcr.load_fixture(LIVE_FIXTURE) if r["platform"] == "google"]
+        backfill = ["--from-google", "--snapshot-date", str(REFRESH_DATE),
+                    "--out-md", str(md_path)]
+
+        # existing registry -> refused (exit 3) before any API call or write
+        bq_writer.get_client = _client([{"n": 16, "latest": "2026-07-04"}])
+        rc = bcr.main(backfill)
+        check(rc == 3 and writes == [] and api_calls == []
+              and "COUNT(*)" in clients[-1].queries[0]
+              and cap.has("BACKFILL refused: campaign_registry already holds 16 row(s)"),
+              f"(c10) live backfill over an existing registry -> exit 3, no ad-API call, "
+              f"no write (rc={rc}, writes={len(writes)}, api={api_calls})")
+
+        # registry state unreadable -> refused (exit 2), fail closed
+        bq_writer.get_client = lambda: (_ for _ in ()).throw(
+            FileNotFoundError("Generation BQ writer key not found"))
+        rc = bcr.main(backfill)
+        check(rc == 2 and writes == [] and api_calls == [],
+              f"(c10) live backfill that can't confirm the registry is empty -> exit 2, "
+              f"no write (rc={rc})")
+
+        # empty registry -> the one-shot backfill still works
+        bq_writer.get_client = _client([{"n": 0, "latest": None}])
+        rc = bcr.main(backfill)
+        check(rc == 0 and len(writes) == 1 and writes[0][0] == "campaign_registry"
+              and api_calls == ["google"],
+              f"(c10) live backfill into an EMPTY registry writes as before (rc={rc}, "
+              f"writes={len(writes)})")
+
+        # --force-backfill -> deliberate overwrite, no existing-registry check
+        writes.clear()
+        clients.clear()
+        bq_writer.get_client = _client([{"n": 16, "latest": "2026-07-04"}])
+        rc = bcr.main([*backfill, "--force-backfill"])
+        check(rc == 0 and len(writes) == 1 and clients == []
+              and cap.has("--force-backfill: skipping the existing-registry check"),
+              f"(c10) --force-backfill writes over an existing registry, with a warning "
+              f"(rc={rc}, writes={len(writes)})")
+    finally:
+        (config.DRY_RUN, bq_writer.get_client, bq_writer.write_rows,
+         bcr.fetch_google_campaigns) = orig
+        bcr.log.removeHandler(cap)
 
 
 # --- LinkedIn-Version fallback (mocked http.client; no network) -------------

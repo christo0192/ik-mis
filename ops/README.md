@@ -16,8 +16,8 @@ deadline is close. It is **SELECT-only**, and there is no BigQuery write path.
 | File | What |
 |---|---|
 | `freshness_watchdog.py` | SPECS (SLAs), EXPIRIES (calendar), pure `evaluate()` / `render_message()`, BigQuery read, Slack post, CLI |
-| `tests_freshness_watchdog.py` | stdlib-only tests (no BigQuery package, no credentials, no network) |
-| `../.github/workflows/freshness-watchdog.yml` | daily schedule + manual dispatch (`dry_run`, `heartbeat`) |
+| `tests_freshness_watchdog.py` | stdlib-only tests (no BigQuery package, no credentials, no network). `../.github/workflows/ci.yml` runs them on every PR and push to main |
+| `../.github/workflows/freshness-watchdog.yml` | daily schedule + manual dispatch (`dry_run`, `heartbeat`). It deliberately does **not** run the tests first, so a red test can never switch alerting off |
 
 ## SLA table
 
@@ -132,6 +132,12 @@ on escalation days, using the same day 1/3/7k rule, counting the expiry date
 as day 1. After renewing, follow the entry's action text and **update its date
 in `EXPIRIES`**. That edit is the only thing that clears the warning.
 
+No test edit is needed for a renewal or a new entry. The tests never pin a real
+`EXPIRIES` date. They use synthetic calendars and check only the structure of
+the real entries: a unique name, a plain `date(...)` (not a `datetime`), and an
+action ending in "then update this date". Run `python
+ops/tests_freshness_watchdog.py` after the edit; CI also runs it on the PR.
+
 ## Changing an SLA
 
 When a pipeline's cadence changes, edit its `TableSpec` in `SPECS` using the
@@ -147,6 +153,12 @@ To add a table, append a `TableSpec`. Identifiers must match
 `^[A-Za-z0-9_]+$`, because they are interpolated into SQL and come only from
 this file. Add the table to the replay snapshot in the tests too, since one
 test asserts that the snapshot covers exactly the SPECS keys.
+
+The tests also pin `freshness-watchdog.yml` with text-level drift guards: the
+cron (`30 10 * * *`), Python 3.12, `permissions: contents: read`, secrets via
+`env:` only, and no unit-test step before the live run. If you change the
+schedule or the Python version, update the "workflow drift guards" block too.
+A red test only fails CI. It never stops the scheduled watchdog.
 
 ## Exit codes
 

@@ -39,7 +39,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: shell syntax
-        run: bash -n run_daily.sh fly-deploy/entrypoint.sh
+        # One file per `bash -n`: `bash -n a b` parses only a (b becomes $1).
+        run: for f in run_daily.sh fly-deploy/entrypoint.sh; do bash -n "$f" || exit 1; done
       - name: shellcheck (errors only)
         run: shellcheck -S error run_daily.sh fly-deploy/entrypoint.sh
       - name: generation test suites

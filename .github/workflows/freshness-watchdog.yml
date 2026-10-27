@@ -17,6 +17,10 @@
 #
 # Inputs and secrets reach the script through env: only -- never through
 # ${{ }} interpolation inside run: (script-injection hardening).
+#
+# No unit-test step here, on purpose: ci.yml runs ops/tests_freshness_watchdog.py
+# on every PR and push to main. Gating this live run on them would let any red
+# test (a stale assertion, a drift guard) silently switch alerting off.
 name: freshness-watchdog
 
 on:
@@ -56,11 +60,6 @@ jobs:
 
       - name: Install dependencies
         run: python -m pip install --disable-pip-version-check 'google-cloud-bigquery>=3,<4'
-
-      - name: Unit tests (offline, no credentials)
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python ops/tests_freshness_watchdog.py
 
       - name: Run watchdog
         env:
