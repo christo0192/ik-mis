@@ -81,14 +81,66 @@ NOT treated as final. An unmatched name gets `funnel_stage=None`, which by
 itself does not set `needs_attention` (only an unparseable segment or an
 `other` program does -- see `classify_campaign()`).
 
+Weekly carry-forward refresh (`--refresh`, added 2026-10-27): the original
+backfill was a one-shot (one snapshot, 2026-07-04, never re-run), so the
+registry -- and the dashboard's /registry tile, and generate_assets'
+active-campaign targeting -- froze in July while the accounts drifted (16
+new + 3 renamed Google ids, 45 new LinkedIn ids by October). Refresh mode
+re-lists the live campaigns and MERGES them onto the prior registry
+(`load_prior_rows()` + `merge_refresh()`), keyed on (platform,
+platform_campaign_id) -- never on campaign_name, which has 3 real LinkedIn
+duplicates:
+  - new id            -> auto-classified (same rules as the backfill)
+  - same id, same name -> classification copied verbatim (manual fixes
+                         survive); only status/snapshot_date update
+  - same id, renamed   -> name + utm_campaign follow the live name; an
+                         untouched (still auto-equal) classification is
+                         re-derived from the new name, a hand-edited one is
+                         kept as a manual override
+  - prior id absent from a FETCHED platform -> carried forward as archived
+  - prior id on a platform whose fetch failed/was skipped -> carried
+    forward unchanged (per-platform fail-soft)
+Every refresh snapshot is therefore COMPLETE (a superset of the prior one),
+which is what lets the dashboard and registry.py read only
+MAX(snapshot_date). main() refuses to write (non-zero exit, no partial
+snapshot) if the prior registry can't be read live, if no platform could be
+fetched, or if the merged snapshot is somehow smaller than the prior one.
+A refresh that DID write but had to carry a REQUESTED platform forward (its
+fetch failed, or its listing tripped the partial-listing guard) exits 4 =
+degraded: run_daily.sh then records a soft failure and the Slack digest
+flags it, because the advanced snapshot_date would otherwise hide a frozen
+platform from every freshness check. When a partial-listing trip is really
+a mass removal, accept it once with --accept-partial <platform> (the missing
+rows are then archived and the guard stops re-firing on them).
+The markdown report goes to generation/staging/ in this mode -- the tracked
+docs/campaign-registry-backfill.md is only overwritten by an explicit
+--out-md.
+
+Backfill mode (no --refresh) is the original one-shot for an EMPTY registry:
+no carry-forward, every classification re-derived from the names, only the
+requested platforms. Because registry.py and the dashboard read only
+MAX(snapshot_date), a live (DRY_RUN=false) backfill over an existing
+registry would replace the latest snapshot with that partial one, so main()
+refuses it -- exit 3 if campaign_registry already has rows, exit 2 if that
+can't be confirmed -- unless --force-backfill is passed. Use --refresh.
+
 Usage:
-    python3 build_campaign_registry.py --from-google
-    python3 build_campaign_registry.py --from-linkedin
-    python3 build_campaign_registry.py --from-google --from-linkedin
+    python3 build_campaign_registry.py --from-google    # backfill: DRY_RUN, or
+    python3 build_campaign_registry.py --from-linkedin  # live only into an
+    python3 build_campaign_registry.py --from-google --from-linkedin  # EMPTY table
     python3 build_campaign_registry.py --from-fixture fixtures/registry_campaigns_raw.json
                                                      # skip both APIs entirely;
                                                      # load raw campaign dicts
                                                      # from a JSON fixture
+    python3 build_campaign_registry.py --refresh --from-google --from-linkedin
+                                                     # weekly carry-forward
+                                                     # refresh (run_daily.sh)
+    python3 build_campaign_registry.py --refresh --from-google --only-if-stale-days 7
+                                                     # no-op unless the latest
+                                                     # snapshot is >= 7 days old
+    python3 build_campaign_registry.py --refresh --from-google --from-linkedin \\
+        --accept-partial linkedin                    # archive a real mass removal
+                                                     # the partial guard flagged
 
 DRY_RUN (default true, see config.py) always applies on the BQ write side,
 regardless of --from-fixture -- set DRY_RUN=false for a live BigQuery load.
@@ -97,14 +149,19 @@ import argparse
 import http.client
 import json
 import logging
+import math
+import os
+import re
 import sys
+import time
 import urllib.parse
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import bq_writer
 import collect_kw_perf
 import config
+import schemas
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -114,14 +171,66 @@ log = logging.getLogger("build_campaign_registry")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "campaign-registry-backfill.md"
 
-LINKEDIN_API_VERSION = "202605"  # matches /mnt/c/mcp-servers/linkedin-ads/server.py's API_VERSION
+# LinkedIn-Version header (YYYYMM). Was a hardcoded "202605" (matching
+# /mnt/c/mcp-servers/linkedin-ads/server.py's API_VERSION). Bumped to "202610"
+# on 2026-10-27, the day the anomaly engine's hardcoded 202503 was found
+# failing with HTTP 426 ("version not active") -- which silently stopped
+# pmis_daily_segment_facts and zeroed LinkedIn spend on the dashboard. Live
+# probe that day: every version <= 202512 returns 426, 202601..202610 return
+# 200. LinkedIn sunsets each monthly version about a year after release, so
+# any pinned value WILL go stale again; two defenses instead of a silent
+# outage: (a) the LINKEDIN_API_VERSION env var overrides this default
+# without a code change, and (b) a 426 triggers the bounded auto-fallback in
+# _linkedin_negotiate_version(), which logs "bump LINKEDIN_API_VERSION".
+_LINKEDIN_API_VERSION_DEFAULT = "202610"
+_LINKEDIN_API_VERSION_RE = re.compile(r"^20\d{4}$")
+# 426 fallback window: the current UTC month plus this many months back
+# (12 -> at most 13 probes). Bounded on purpose -- a run must never spin
+# through an open-ended version search.
+_LINKEDIN_VERSION_FALLBACK_MONTHS = 12
 
-# Safety cap on pagination loop iterations (pages, not rows) -- guards
-# against an infinite loop from a bug in cursor/offset handling, not a real
-# business limit (both accounts today are two orders of magnitude smaller
-# than this). Hitting it is always worth a loud log.error, never a silent
-# truncation.
+
+def _resolve_linkedin_api_version(raw: str | None) -> str:
+    """LINKEDIN_API_VERSION env override, validated as YYYYMM (^20\\d{4}$).
+    Unset/blank -> the default. A malformed value is ignored with a warning
+    (falling back to the default) rather than sent as a header LinkedIn
+    would reject anyway."""
+    v = (raw or "").strip()
+    if not v:
+        return _LINKEDIN_API_VERSION_DEFAULT
+    if not _LINKEDIN_API_VERSION_RE.match(v):
+        log.warning("Ignoring malformed LINKEDIN_API_VERSION=%r (expected YYYYMM, "
+                    "e.g. %s) -- using the default %s",
+                    v, _LINKEDIN_API_VERSION_DEFAULT, _LINKEDIN_API_VERSION_DEFAULT)
+        return _LINKEDIN_API_VERSION_DEFAULT
+    return v
+
+
+LINKEDIN_API_VERSION = _resolve_linkedin_api_version(os.environ.get("LINKEDIN_API_VERSION"))
+
+# Safety cap on LinkedIn pagination loop iterations (pages, not rows) --
+# guards against an infinite loop from a bug in cursor/offset handling, not a
+# real business limit (both accounts today are two orders of magnitude
+# smaller than this). Hitting it RAISES (ListingTooLargeError), never a
+# silent truncation: a --refresh treats whatever a fetch returns as the
+# COMPLETE listing and archives every prior campaign missing from it.
 _MAX_PAGINATION_ITERATIONS = 500
+
+# Safety cap on Google campaign ROWS (`ga.search()` paginates internally, so
+# this loop sees rows, not pages). The account keeps REMOVED campaigns in the
+# listing forever (~135 rows in 2026-10, growing a few a month), so this is
+# set far above any plausible size; hitting it raises like the LinkedIn cap
+# (review round 2: it used to be the 500 PAGE cap applied to rows, logged and
+# returned the truncated list as a full listing -- which a weekly refresh
+# would then have archived campaigns from).
+_MAX_GOOGLE_CAMPAIGN_ROWS = 10_000
+
+
+class ListingTooLargeError(RuntimeError):
+    """A campaign listing hit its safety cap -- the rows collected so far are
+    NOT the complete listing and must not be used as one. Not retried by the
+    refresh (a retry would hit the same cap); the platform is carried
+    forward and the refresh exits 4 (degraded)."""
 
 
 # ---------------------------------------------------------------------------
@@ -134,11 +243,11 @@ def fetch_google_campaigns() -> list[dict]:
 
     `ga.search()` is itself a paginating generator (the google-ads client
     library fetches successive result pages under the hood, transparently to
-    this loop) -- the iteration cap below guards this loop the same way the
+    this loop) -- the row cap below guards this loop the same way the
     explicit `while True` in fetch_linkedin_campaigns() is capped: a runaway
-    generator (bad server-side cursor, client library bug) should hit a loud
-    error, not silently iterate forever or hand back a truncated set without
-    any signal."""
+    generator (bad server-side cursor, client library bug) RAISES
+    ListingTooLargeError, never silently iterates forever or hands back a
+    truncated set as if it were the full listing."""
     client, customer_id = collect_kw_perf._client_and_customer_id()
     ga = client.get_service("GoogleAdsService")
     query = """
@@ -148,15 +257,16 @@ def fetch_google_campaigns() -> list[dict]:
     """
     rows = []
     for i, r in enumerate(ga.search(customer_id=customer_id, query=query)):
-        if i >= _MAX_PAGINATION_ITERATIONS:
+        if i >= _MAX_GOOGLE_CAMPAIGN_ROWS:
             log.error(
                 "Google Ads campaign listing exceeded %d row(s) without "
                 "terminating -- aborting to avoid an unbounded fetch. "
-                "Collected %d campaign(s) so far; if this account genuinely "
-                "has more than %d campaigns, raise _MAX_PAGINATION_ITERATIONS "
-                "deliberately rather than silently truncating.",
-                _MAX_PAGINATION_ITERATIONS, len(rows), _MAX_PAGINATION_ITERATIONS)
-            break
+                "Collected %d campaign(s) so far; NOT returning them as the "
+                "listing. If this account genuinely has more than %d "
+                "campaigns, raise _MAX_GOOGLE_CAMPAIGN_ROWS deliberately.",
+                _MAX_GOOGLE_CAMPAIGN_ROWS, len(rows), _MAX_GOOGLE_CAMPAIGN_ROWS)
+            raise ListingTooLargeError(
+                f"Google Ads campaign listing exceeded {_MAX_GOOGLE_CAMPAIGN_ROWS} rows")
         rows.append({
             "platform": "google",
             "campaign_id": str(r.campaign.id),
@@ -205,12 +315,16 @@ def _linkedin_refresh_access_token(env: dict) -> str | None:
         conn.close()
 
 
-def _linkedin_get(access_token: str, path: str) -> tuple[int, dict]:
+def _linkedin_get(access_token: str, path: str,
+                  version: str | None = None) -> tuple[int, dict]:
+    """`version` defaults to the module-level LINKEDIN_API_VERSION (read at
+    call time, not bound at def time); the 426 fallback passes each probe
+    version explicitly."""
     conn = http.client.HTTPSConnection("api.linkedin.com", timeout=30)
     try:
         conn.request("GET", path, headers={
             "Authorization": f"Bearer {access_token}",
-            "LinkedIn-Version": LINKEDIN_API_VERSION,
+            "LinkedIn-Version": version or LINKEDIN_API_VERSION,
             "X-Restli-Protocol-Version": "2.0.0",
         })
         resp = conn.getresponse()
@@ -219,6 +333,69 @@ def _linkedin_get(access_token: str, path: str) -> tuple[int, dict]:
         return resp.status, parsed
     finally:
         conn.close()
+
+
+def _utc_now() -> datetime:
+    """Seam for tests (the 426 fallback's candidate window is relative to
+    the current UTC month)."""
+    return datetime.now(UTC)
+
+
+def _linkedin_version_candidates(now: datetime | None = None) -> list[str]:
+    """YYYYMM strings from the current UTC month back
+    _LINKEDIN_VERSION_FALLBACK_MONTHS months, newest first (13 by default),
+    crossing year boundaries correctly (2027-01 -> 202701, 202612, ...)."""
+    now = now or _utc_now()
+    y, m = now.year, now.month
+    out = []
+    for _ in range(_LINKEDIN_VERSION_FALLBACK_MONTHS + 1):
+        out.append(f"{y:04d}{m:02d}")
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    return out
+
+
+def _linkedin_negotiate_version(get, rejected_version: str,
+                                now: datetime | None = None) -> tuple[str, int, dict]:
+    """Bounded auto-fallback after the configured LinkedIn-Version got a 426.
+
+    `get(version) -> (status, data)` re-issues the SAME request with that
+    version header (so the winning probe's response IS the page -- no extra
+    call). Probes newest-first from the current UTC month back
+    _LINKEDIN_VERSION_FALLBACK_MONTHS months (at most 13 attempts; the
+    already-rejected version is skipped), returning the first 2xx as
+    (version, status, data) with a loud "bump LINKEDIN_API_VERSION" warning.
+
+    Stops early on 401/403: an auth failure (after `get`'s own one-shot
+    token refresh) is not a version problem, and another 12 authenticated
+    failures would only add noise. If nothing works, returns the last
+    non-2xx response with `rejected_version`, and the caller fails the
+    LinkedIn fetch as before (in --refresh mode that platform is then
+    carried forward, per fail-soft)."""
+    status, data = 426, {}
+    attempts = 0
+    for cand in _linkedin_version_candidates(now):
+        if cand == rejected_version:
+            continue
+        attempts += 1
+        status, data = get(cand)
+        if 200 <= status < 300:
+            log.warning(
+                "LOUD WARNING: LinkedIn-Version %s was rejected (HTTP 426, version "
+                "not active); auto-fell back to %s after %d probe(s). bump "
+                "LINKEDIN_API_VERSION to %s (env var, or the default in "
+                "build_campaign_registry.py) so runs stop paying for this probe.",
+                rejected_version, cand, attempts, cand)
+            return cand, status, data
+        if status in (401, 403):
+            log.error("LinkedIn-Version fallback stopped at %s: HTTP %d is an auth "
+                      "failure, not a version problem.", cand, status)
+            return rejected_version, status, data
+    log.error("LinkedIn-Version fallback exhausted: %s got 426 and none of %d "
+              "probed version(s) returned 2xx (last HTTP %d) -- failing the "
+              "LinkedIn fetch.", rejected_version, attempts, status)
+    return rejected_version, status, data
 
 
 def fetch_linkedin_campaigns() -> list[dict]:
@@ -241,14 +418,44 @@ def fetch_linkedin_campaigns() -> list[dict]:
       - if any page's `paging.total` is present, it is compared against the
         final collected count once the loop ends, with a loud warning on any
         mismatch.
+
+    LinkedIn-Version (2026-10-27): every request sends LINKEDIN_API_VERSION;
+    the first 426 ("version not active") hands the same request to
+    _linkedin_negotiate_version()'s bounded fallback, and the version it
+    finds is then used for every later page of this fetch. A second 426
+    after that (or a fallback that finds nothing) raises like any other
+    non-2xx.
     """
     env = collect_kw_perf.load_env(_linkedin_env_path())
     access_token = env["LINKEDIN_ACCESS_TOKEN"]
     ad_account_id = env["LINKEDIN_AD_ACCOUNT_ID"]
 
+    refreshed_once = False
+
+    def _get(path: str, version: str) -> tuple[int, dict]:
+        """One GET plus the single refresh-and-retry on 401 -- the same
+        semantics the inline loop had before the 426 fallback needed to
+        share it: at most one refresh per fetch, the same request retried
+        immediately, a refresh failure raises."""
+        nonlocal access_token, refreshed_once
+        status, data = _linkedin_get(access_token, path, version)
+        if status == 401 and not refreshed_once:
+            log.warning("LinkedIn API 401 -- attempting token refresh...")
+            new_token = _linkedin_refresh_access_token(env)
+            if not new_token:
+                raise RuntimeError(
+                    "LinkedIn API returned 401 and token refresh failed/unconfigured. "
+                    "Run: cd /mnt/c/mcp-servers/linkedin-ads && python get_token.py")
+            access_token = new_token
+            refreshed_once = True
+            status, data = _linkedin_get(access_token, path, version)
+        return status, data
+
+    api_version = LINKEDIN_API_VERSION
+    version_negotiated = False
+
     rows = []
     page_size = 200
-    refreshed_once = False
     page_token: str | None = None      # primary: cursor pagination
     page_start = 0                     # fallback: legacy offset pagination
     reported_total: int | None = None
@@ -260,10 +467,11 @@ def fetch_linkedin_campaigns() -> list[dict]:
                 "LinkedIn campaign pagination exceeded %d page(s) without "
                 "terminating -- aborting to avoid an infinite loop. Collected "
                 "%d campaign(s) so far; this is almost certainly a cursor-"
-                "handling bug rather than a real account this large. Do NOT "
-                "trust this count -- investigate before using it.",
+                "handling bug rather than a real account this large. NOT "
+                "returning them as the listing -- investigate.",
                 _MAX_PAGINATION_ITERATIONS, len(rows))
-            break
+            raise ListingTooLargeError(
+                f"LinkedIn campaign pagination exceeded {_MAX_PAGINATION_ITERATIONS} pages")
 
         if page_token:
             path = (f"/rest/adAccounts/{ad_account_id}/adCampaigns"
@@ -272,19 +480,12 @@ def fetch_linkedin_campaigns() -> list[dict]:
         else:
             path = (f"/rest/adAccounts/{ad_account_id}/adCampaigns"
                     f"?q=search&count={page_size}&start={page_start}")
-        status, data = _linkedin_get(access_token, path)
-        if status == 401 and not refreshed_once:
-            log.warning("LinkedIn API 401 -- attempting token refresh...")
-            new_token = _linkedin_refresh_access_token(env)
-            if not new_token:
-                raise RuntimeError(
-                    "LinkedIn API returned 401 and token refresh failed/unconfigured. "
-                    "Run: cd /mnt/c/mcp-servers/linkedin-ads && python get_token.py")
-            access_token = new_token
-            refreshed_once = True
-            page_num -= 1  # retry the same page; doesn't count against the cap
-            continue
-        if status != 200:
+        status, data = _get(path, api_version)
+        if status == 426 and not version_negotiated:
+            version_negotiated = True
+            api_version, status, data = _linkedin_negotiate_version(
+                lambda v, _path=path: _get(_path, v), api_version)
+        if not 200 <= status < 300:
             raise RuntimeError(f"LinkedIn API error ({status}): {str(data)[:300]}")
 
         elements = data.get("elements", [])
@@ -550,6 +751,17 @@ def render_backfill_markdown(classified: list[dict], snapshot_date: date) -> str
         "Existing campaigns are NOT renamed -- this table only assigns registry "
         "metadata to the live, as-is campaign name.",
         "",
+    ]
+    lines += _registry_table_lines(classified)
+    return "\n".join(lines)
+
+
+def _registry_table_lines(classified: list[dict]) -> list[str]:
+    """The "Campaigns needing attention" + "All campaigns" tables, shared by
+    the backfill report and the --refresh report (split out 2026-10-27; the
+    backfill report's bytes are unchanged)."""
+    flagged = [c for c in classified if c["needs_attention"]]
+    lines = [
         "## Campaigns needing attention",
         "",
     ]
@@ -587,7 +799,7 @@ def render_backfill_markdown(classified: list[dict], snapshot_date: date) -> str
             f"{'YES' if c['needs_attention'] else 'no'} |"
         )
     lines.append("")
-    return "\n".join(lines)
+    return lines
 
 
 def write_backfill_markdown(classified: list[dict], snapshot_date: date,
@@ -595,6 +807,616 @@ def write_backfill_markdown(classified: list[dict], snapshot_date: date,
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(render_backfill_markdown(classified, snapshot_date), encoding="utf-8")
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# Weekly carry-forward refresh (--refresh) -- see module docstring
+# ---------------------------------------------------------------------------
+# The exact write-time contract -- prior rows (a live SELECT *, a preview
+# file, a fixture) are stripped to these keys so a read-layer-only column
+# can't trip schemas._Row's extra="forbid" at write time.
+_REGISTRY_ROW_FIELDS = tuple(schemas.CampaignRegistryRow.model_fields)
+
+_PREVIEW_PATH = config.STAGING_DIR / "bq_preview_campaign_registry.json"
+
+# Event kinds merge_refresh() reports, in markdown/summary order.
+_REFRESH_EVENTS = ("new", "renamed", "status_changed", "disappeared",
+                   "overrides_kept", "carried_unfetched")
+
+
+def _registry_key(platform, platform_campaign_id, campaign_name) -> tuple[str, str]:
+    """(platform, platform_campaign_id), or (platform, 'name:'+campaign_name)
+    when the id is null/blank. Never the name alone when an id exists: the
+    live registry has 3 LinkedIn names shared by 2 distinct ids each."""
+    pid = "" if platform_campaign_id is None else str(platform_campaign_id).strip()
+    if pid:
+        return (platform or "", pid)
+    return (platform or "", "name:" + (campaign_name or ""))
+
+
+def _as_date(value) -> date | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def _strip_to_model_fields(row: dict) -> dict:
+    out = {k: row.get(k) for k in _REGISTRY_ROW_FIELDS if k in row}
+    if out.get("platform_campaign_id") is not None:
+        out["platform_campaign_id"] = str(out["platform_campaign_id"])
+    return out
+
+
+def _load_prior_rows_from_bq() -> list[dict]:
+    """Latest row per registry key across ALL snapshots (same client/allowlist
+    pattern as registry._load_from_bq). Across-all rather than MAX-only so a
+    key some earlier snapshot had is never lost even if a later snapshot
+    were incomplete. Raises on any failure -- the caller refuses to write."""
+    table_id = bq_writer.validate_target("campaign_registry")
+    client = bq_writer.get_client()          # lazy bigquery import inside bq_writer
+    query = f"""
+        SELECT * EXCEPT(rn) FROM (
+          SELECT *, ROW_NUMBER() OVER (
+            PARTITION BY platform,
+                         COALESCE(platform_campaign_id, CONCAT('name:', campaign_name))
+            ORDER BY snapshot_date DESC
+          ) AS rn
+          FROM `{table_id}`
+        )
+        WHERE rn = 1
+    """
+    result = client.query(query).result(timeout=120)
+    return [dict(r.items()) for r in result]
+
+
+def load_prior_rows(prior_fixture: str | None) -> tuple[list[dict], date | None]:
+    """The registry a --refresh merges onto, plus its max snapshot_date.
+
+    - `prior_fixture` given (tests): that JSON file (bare list or {rows: [...]}).
+    - live (not config.DRY_RUN): BigQuery, `_load_prior_rows_from_bq()`.
+      Raises on failure -- never swallowed (main() then exits 2, no write).
+    - DRY_RUN: the local staging preview a previous DRY_RUN write left
+      (the same file registry.py's DRY_RUN fallback reads), else [].
+    Rows come back stripped to schemas.CampaignRegistryRow's fields."""
+    if prior_fixture:
+        rows = load_fixture(prior_fixture)
+    elif not config.DRY_RUN:
+        rows = _load_prior_rows_from_bq()
+    elif _PREVIEW_PATH.exists():
+        rows = load_fixture(_PREVIEW_PATH)
+    else:
+        rows = []
+    rows = [_strip_to_model_fields(r) for r in rows]
+    dates = [d for d in (_as_date(r.get("snapshot_date")) for r in rows) if d]
+    return rows, (max(dates) if dates else None)
+
+
+def _dedupe_prior(prior_rows: list[dict]) -> list[dict]:
+    """One prior row per key (latest snapshot_date wins; ties -> later row),
+    then drop a null-id row whose (platform, campaign_name) also exists as
+    an id'd row -- after a refresh fills in a missing id, the across-all-
+    snapshots read returns BOTH the old name-keyed row and the new id-keyed
+    one, and the stale one must not resurface as a 'disappeared' ghost."""
+    by_key: dict = {}
+    for r in prior_rows:
+        k = _registry_key(r.get("platform"), r.get("platform_campaign_id"),
+                          r.get("campaign_name"))
+        cur = by_key.get(k)
+        if cur is None or (_as_date(r.get("snapshot_date")) or date.min) >= \
+                (_as_date(cur.get("snapshot_date")) or date.min):
+            by_key[k] = r
+    id_names = {(k[0], r.get("campaign_name")) for k, r in by_key.items()
+                if not k[1].startswith("name:")}
+    return [r for k, r in by_key.items()
+            if not (k[1].startswith("name:") and (k[0], r.get("campaign_name")) in id_names)]
+
+
+def _empty_refresh_report() -> dict:
+    report = {kind: [] for kind in _REFRESH_EVENTS}
+    report["by_platform"] = {}
+    report["prior_count"] = 0
+    return report
+
+
+def _bump(report: dict, platform: str, key: str) -> None:
+    counts = report["by_platform"].setdefault(
+        platform, {"prior": 0, "prior_not_archived": 0,
+                   **{kind: 0 for kind in _REFRESH_EVENTS}})
+    counts[key] += 1
+
+
+def merge_refresh(prior_rows: list[dict], live_raw: list[dict],
+                  fetched_platforms: set, snapshot_date: date,
+                  now: datetime) -> tuple[list[dict], dict]:
+    """Pure merge: (prior registry rows, live raw campaigns) -> (complete new
+    snapshot rows, change report). See the module docstring for the rules.
+
+    `fetched_platforms` = the platforms whose live listing actually came
+    back this run; a prior row on any other platform is carried forward
+    unchanged (status intact). Every output row carries snapshot_date=new,
+    holds only schemas.CampaignRegistryRow keys, and keeps registered_at as
+    the datetime/ISO string it had (now, for new campaigns).
+
+    'disappeared' counts only a TRANSITION into archived (a prior row that
+    wasn't archived, absent from its fetched platform's listing); an
+    already-archived absent row is carried silently, so one deleted campaign
+    isn't re-reported every week forever. 'overrides_kept' counts renamed
+    rows whose hand-edited classification was kept; a same-name row's
+    classification is always copied verbatim, edited or not."""
+    prior = _dedupe_prior(prior_rows)
+    report = _empty_refresh_report()
+    report["prior_count"] = len(prior)
+    prior_by_key: dict = {}
+    for r in prior:
+        prior_by_key[_registry_key(r.get("platform"), r.get("platform_campaign_id"),
+                                   r.get("campaign_name"))] = r
+        _bump(report, r.get("platform") or "", "prior")
+        if (r.get("status") or "active") != "archived":
+            _bump(report, r.get("platform") or "", "prior_not_archived")
+
+    merged: list[dict] = []
+    consumed: set = set()
+    seen_live: set = set()
+    for raw in live_raw:
+        platform = raw.get("platform") or ""
+        name = raw.get("campaign_name") or ""
+        cid = raw.get("campaign_id")
+        live_key = _registry_key(platform, cid, name)
+        if live_key in seen_live:
+            log.warning("Duplicate live campaign %s in this listing -- keeping the "
+                        "first occurrence", live_key)
+            continue
+        seen_live.add(live_key)
+
+        match_key = None
+        name_key = (platform, "name:" + name)
+        if live_key in prior_by_key and live_key not in consumed:
+            match_key = live_key
+        elif name_key in prior_by_key and name_key not in consumed:
+            match_key = name_key       # prior row had no id -- matched by name
+
+        if match_key is None:                                   # (a) new
+            row = build_registry_rows([raw], snapshot_date)[0]["registry_row"]
+            row["registered_at"] = now
+            merged.append(row)
+            _bump(report, platform, "new")
+            report["new"].append(row)
+            continue
+
+        consumed.add(match_key)
+        old = prior_by_key[match_key]
+        old_status = old.get("status") or "active"
+        new_status = _map_status(platform, raw.get("status"))
+        row = dict(old)
+        row["platform_campaign_id"] = (str(cid) if cid not in (None, "")
+                                       else old.get("platform_campaign_id"))
+        row["status"] = new_status
+        row["snapshot_date"] = str(snapshot_date)
+        if not row.get("registered_at"):
+            row["registered_at"] = now
+
+        old_name = old.get("campaign_name") or ""
+        if name != old_name:                                    # (c) renamed
+            row["campaign_name"] = name
+            row["utm_campaign"] = name
+            auto_old = classify_campaign(platform, old_name)
+            untouched = ((old.get("segment"), old.get("program"), old.get("funnel_stage"))
+                         == (auto_old["segment"], auto_old["program"], auto_old["audience"]))
+            if untouched:
+                auto_new = classify_campaign(platform, name)
+                row["segment"] = auto_new["segment"]
+                row["program"] = auto_new["program"]
+                row["funnel_stage"] = auto_new["audience"]
+            else:
+                log.info("Renamed %s %r -> %r: keeping its hand-edited classification "
+                         "(segment=%r program=%r funnel_stage=%r) as a manual override",
+                         platform, old_name, name, old.get("segment"),
+                         old.get("program"), old.get("funnel_stage"))
+                _bump(report, platform, "overrides_kept")
+                report["overrides_kept"].append(
+                    {**row, "auto": classify_campaign(platform, name)})
+            _bump(report, platform, "renamed")
+            report["renamed"].append({**row, "old_name": old_name,
+                                      "reclassified": untouched})
+        if new_status != old_status:                            # (b)/(c) status
+            _bump(report, platform, "status_changed")
+            report["status_changed"].append({**row, "old_status": old_status})
+        merged.append(row)
+
+    for key, old in prior_by_key.items():                       # absent from live
+        if key in consumed:
+            continue
+        platform = old.get("platform") or ""
+        row = dict(old)
+        row["snapshot_date"] = str(snapshot_date)
+        row["status"] = old.get("status") or "active"
+        if not row.get("registered_at"):
+            row["registered_at"] = now
+        if platform in fetched_platforms:
+            if row["status"] != "archived":
+                _bump(report, platform, "disappeared")
+                report["disappeared"].append({**row, "old_status": row["status"]})
+            row["status"] = "archived"
+        else:
+            _bump(report, platform, "carried_unfetched")
+            report["carried_unfetched"].append(row)
+        merged.append(row)
+
+    merged = [{k: r.get(k) for k in _REGISTRY_ROW_FIELDS} for r in merged]
+    return merged, report
+
+
+def _suspect_partial_platforms(report: dict, fetched_platforms: set,
+                               min_retain_ratio: float) -> set:
+    """Fetched platforms whose listing looks truncated: fewer than
+    ceil(min_retain_ratio * N) of the N prior not-archived campaigns were
+    still in it. Ad platforms keep removed/archived campaigns in their
+    listings (Google returns REMOVED, LinkedIn ARCHIVED), so a mass
+    disappearance is far more likely a partial fetch -- e.g. the July
+    LinkedIn pagination bug that returned 100 of 175 -- than reality.
+    Archiving those rows would silently drop live campaigns out of
+    generate_assets' active set, so main() carries such a platform forward
+    unchanged instead (added 2026-10-27)."""
+    suspect = set()
+    for platform in fetched_platforms:
+        counts = report["by_platform"].get(platform)
+        if not counts or not counts["prior_not_archived"]:
+            continue
+        base = counts["prior_not_archived"]
+        if base - counts["disappeared"] < math.ceil(min_retain_ratio * base):
+            suspect.add(platform)
+    return suspect
+
+
+def _classified_view(row: dict) -> dict:
+    """A merged registry row in the shape _registry_table_lines() renders."""
+    return {
+        "campaign_name": row.get("campaign_name") or "",
+        "platform_campaign_id": row.get("platform_campaign_id"),
+        "platform": row.get("platform") or "",
+        "status": row.get("status"),
+        "segment": row.get("segment"),
+        "program": row.get("program"),
+        "audience": row.get("funnel_stage"),
+        "needs_attention": (row.get("program") == "other") or (row.get("segment") == "Other"),
+    }
+
+
+def _refresh_totals(report: dict) -> dict:
+    return {kind: len(report[kind]) for kind in _REFRESH_EVENTS}
+
+
+def render_refresh_markdown(merged: list[dict], report: dict, snapshot_date: date,
+                            prior_max: date | None, sources: dict) -> str:
+    view = [_classified_view(r) for r in merged]
+    totals = _refresh_totals(report)
+    by_platform: dict = {}
+    for c in view:
+        by_platform[c["platform"]] = by_platform.get(c["platform"], 0) + 1
+    flagged = sum(1 for c in view if c["needs_attention"])
+
+    def cell(v):
+        return _md_cell(v)
+
+    lines = [
+        f"# Campaign Registry Refresh -- {snapshot_date}",
+        "",
+        (f"Generated by `generation/build_campaign_registry.py --refresh` for "
+         f"snapshot_date `{snapshot_date}`, carried forward from the prior "
+         f"registry (latest snapshot `{prior_max or 'none'}`, "
+         f"{report['prior_count']} campaign(s)). Rows validated against "
+         f"`schemas.CampaignRegistryRow` and written via the guarded writer "
+         f"(DRY_RUN default -- see config.py)."),
+        "",
+        f"- Total campaigns: **{len(merged)}**",
+        "- Sources: " + ", ".join(f"{p}={s}" for p, s in sorted(sources.items())),
+        "- Changes: " + ", ".join(f"{k}={v}" for k, v in totals.items()),
+        f"- Needs attention (`other` program or unparseable segment): **{flagged}**",
+        "- By platform: " + ", ".join(f"{p}={n}" for p, n in sorted(by_platform.items())),
+        "",
+        "## New since last snapshot",
+        "",
+    ]
+    if report["new"]:
+        lines += [("| campaign_name | platform_campaign_id | platform | program | segment | "
+                   "audience | status |"), "|---|---|---|---|---|---|---|"]
+        for r in report["new"]:
+            lines.append(f"| `{cell(r['campaign_name'])}` | {cell(r['platform_campaign_id'])} | "
+                         f"{cell(r['platform'])} | {cell(r['program'])} | {cell(r['segment'])} | "
+                         f"{cell(r['funnel_stage']) or '_(none)_'} | {cell(r['status'])} |")
+    else:
+        lines.append("_(none)_")
+
+    lines += ["", "## Renamed", ""]
+    if report["renamed"]:
+        lines += ["| platform | platform_campaign_id | old name | new name | classification |",
+                  "|---|---|---|---|---|"]
+        for r in report["renamed"]:
+            how = ("re-derived from new name" if r["reclassified"]
+                   else "manual override kept")
+            lines.append(f"| {cell(r['platform'])} | {cell(r['platform_campaign_id'])} | "
+                         f"`{cell(r['old_name'])}` | `{cell(r['campaign_name'])}` | {how} |")
+    else:
+        lines.append("_(none)_")
+
+    lines += ["", "## Status changes", ""]
+    if report["status_changed"]:
+        lines += ["| campaign_name | platform_campaign_id | platform | was | now |",
+                  "|---|---|---|---|---|"]
+        for r in report["status_changed"]:
+            lines.append(f"| `{cell(r['campaign_name'])}` | {cell(r['platform_campaign_id'])} | "
+                         f"{cell(r['platform'])} | {cell(r['old_status'])} | {cell(r['status'])} |")
+    else:
+        lines.append("_(none)_")
+
+    lines += ["", "## Disappeared (archived)", ""]
+    if report["disappeared"]:
+        lines += ["| campaign_name | platform_campaign_id | platform | was |",
+                  "|---|---|---|---|"]
+        for r in report["disappeared"]:
+            lines.append(f"| `{cell(r['campaign_name'])}` | {cell(r['platform_campaign_id'])} | "
+                         f"{cell(r['platform'])} | {cell(r['old_status'])} |")
+    else:
+        lines.append("_(none)_")
+
+    lines += ["", "## Manual overrides kept", ""]
+    if report["overrides_kept"]:
+        lines += [("| campaign_name | platform_campaign_id | kept program / segment / audience | "
+                   "auto would be |"), "|---|---|---|---|"]
+        for r in report["overrides_kept"]:
+            auto = r["auto"]
+            lines.append(f"| `{cell(r['campaign_name'])}` | {cell(r['platform_campaign_id'])} | "
+                         f"{cell(r['program'])} / {cell(r['segment'])} / "
+                         f"{cell(r['funnel_stage']) or '_(none)_'} | {cell(auto['program'])} / "
+                         f"{cell(auto['segment'])} / {cell(auto['audience']) or '_(none)_'} |")
+    else:
+        lines.append("_(none)_")
+
+    if report["carried_unfetched"]:
+        lines += ["", (f"_{len(report['carried_unfetched'])} campaign(s) carried forward "
+                       f"unchanged because their platform was not fetched this run._")]
+    lines.append("")
+    lines += _registry_table_lines(view)
+    return "\n".join(lines)
+
+
+# Refresh-mode retry of a failed per-platform fetch (review round 2). A
+# degraded refresh still WRITES a snapshot dated today, so the daily
+# --only-if-stale-days gate then sees a fresh registry and does not retry
+# until next Monday: one transient 5xx/timeout used to cost up to 14 days of
+# staleness on that platform. Retrying here, inside the same run, is what
+# keeps a transient error from degrading the week. Config errors (missing
+# .env / key / package) and a capped listing are not retried -- a retry
+# cannot fix them. Delays: REGISTRY_FETCH_RETRY_DELAYS_S (comma/space list of
+# seconds, default "30,120" -> up to 3 attempts); no retry is STARTED once
+# _FETCH_RETRY_BUDGET_S has passed for that platform, so the retries stay well
+# inside run_daily.sh's REGISTRY_REFRESH_TIMEOUT_S (900s) bound.
+_FETCH_RETRY_DELAYS_DEFAULT = (30.0, 120.0)
+_FETCH_RETRY_BUDGET_S = 300.0
+_NON_RETRYABLE_FETCH_ERRORS = (FileNotFoundError, KeyError, ImportError, ListingTooLargeError)
+_sleep = time.sleep          # module attribute so tests can stub it out
+
+
+def _fetch_retry_delays(raw: str | None) -> tuple[float, ...]:
+    """Parse REGISTRY_FETCH_RETRY_DELAYS_S. Unset/blank -> the default; a
+    malformed or negative value logs a warning and uses the default (never
+    crashes the refresh over a tuning knob)."""
+    v = (raw or "").strip()
+    if not v:
+        return _FETCH_RETRY_DELAYS_DEFAULT
+    try:
+        delays = tuple(float(x) for x in re.split(r"[,\s]+", v) if x)
+    except ValueError:
+        delays = ()
+    if not delays or any(d < 0 or math.isnan(d) for d in delays):
+        log.warning("Ignoring malformed REGISTRY_FETCH_RETRY_DELAYS_S=%r (expected "
+                    "comma-separated seconds, e.g. 30,120) -- using the default %s",
+                    v, ",".join(f"{d:g}" for d in _FETCH_RETRY_DELAYS_DEFAULT))
+        return _FETCH_RETRY_DELAYS_DEFAULT
+    return delays
+
+
+def _fetch_with_retry(label: str, fetch, delays, clock=time.monotonic):
+    """fetch(), retried after each of `delays` seconds on a transient error.
+    Re-raises the last error (the caller's per-platform fail-soft then
+    carries the platform forward); config errors raise immediately."""
+    start = clock()
+    attempts = len(delays) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return fetch()
+        except _NON_RETRYABLE_FETCH_ERRORS:
+            raise
+        except Exception as e:  # retried, then re-raised to the caller
+            if attempt == attempts:
+                raise
+            delay = delays[attempt - 1]
+            if clock() - start + delay > _FETCH_RETRY_BUDGET_S:
+                log.warning("%s campaign pull failed (attempt %d of %d: %s) -- retry "
+                            "budget of %gs exhausted, not retrying", label, attempt,
+                            attempts, e, _FETCH_RETRY_BUDGET_S)
+                raise
+            log.warning("%s campaign pull failed (attempt %d of %d: %s) -- retrying in %gs",
+                        label, attempt, attempts, e, delay)
+            _sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _main_refresh(args, snapshot_date: date) -> int:
+    """--refresh path of main(); see the module docstring. Exit codes:
+    0 ok (or skipped as fresh), 1 nothing fetched / write failed,
+    2 prior registry unreadable (no write), 3 shrink guard (no write),
+    4 DEGRADED -- the complete carry-forward snapshot WAS written, but a
+    requested platform was carried forward (fetch failed or listing looked
+    partial), so its new/changed campaigns are missing from it."""
+    ratio = 0.9 if args.min_retain_ratio is None else args.min_retain_ratio
+    if not 0 < ratio <= 1:
+        log.error("--min-retain-ratio must be in (0, 1] (got %r)", ratio)
+        return 1
+
+    # (i) Prior registry. A snapshot written without it would have no
+    # carry-forward -- and the dashboard reads only MAX(snapshot_date), so
+    # an incomplete one blanks every campaign missing from it.
+    try:
+        prior_rows, prior_max = load_prior_rows(args.prior_fixture)
+    except Exception as e:  # noqa: BLE001 -- any prior-read failure means "do not write"
+        log.error("REGISTRY_REFRESH aborted: could not load the prior registry (%s) "
+                  "-- refusing to write a snapshot without carry-forward.", e)
+        return 2
+    if not prior_rows:
+        log.warning("No prior registry rows (%s) -- every campaign registers as new.",
+                    "DRY_RUN: no local preview yet, preview only" if config.DRY_RUN
+                    else "the live table is empty")
+
+    # (ii) Staleness gate -- before any ad-platform API call.
+    if args.only_if_stale_days is not None and prior_max is not None:
+        age = (snapshot_date - prior_max).days
+        if age < args.only_if_stale_days:
+            log.info("registry fresh (latest=%s, %d day(s) old < %d) -- skipping",
+                     prior_max, age, args.only_if_stale_days)
+            return 0
+
+    # (iii) Per-platform fetch, each fail-soft: a platform that still fails
+    # after its retries (_fetch_with_retry) is carried forward unchanged.
+    delays = _fetch_retry_delays(os.environ.get("REGISTRY_FETCH_RETRY_DELAYS_S"))
+    live_raw: list[dict] = []
+    fetched: set = set()
+    if args.from_fixture:
+        live_raw = load_fixture(args.from_fixture)
+        fetched = {r.get("platform") for r in live_raw if r.get("platform")}
+        requested = set(fetched)
+        log.info("Loaded %d raw campaign(s) from fixture %s (APIs skipped; fetched=%s)",
+                 len(live_raw), args.from_fixture, sorted(fetched))
+    else:
+        requested = ({"google"} if args.from_google else set()) | \
+                    ({"linkedin"} if args.from_linkedin else set())
+        if args.from_google:
+            try:
+                google_rows = _fetch_with_retry(
+                    "Google Ads", fetch_google_campaigns, delays)
+                log.info("Pulled %d live Google Ads campaign(s)", len(google_rows))
+                live_raw += google_rows
+                fetched.add("google")
+            except FileNotFoundError as e:
+                log.warning("Google Ads credentials not found (%s) -- carrying Google forward", e)
+            except KeyError as e:
+                log.warning("Google Ads .env missing a required key (%s) -- carrying Google forward", e)
+            except ImportError as e:
+                log.warning("google-ads package not importable (%s) -- carrying Google forward", e)
+            except Exception as e:  # noqa: BLE001 -- per-platform fail-soft, by design
+                log.warning("Google Ads campaign pull failed (%s) -- carrying Google forward", e)
+        if args.from_linkedin:
+            try:
+                linkedin_rows = _fetch_with_retry(
+                    "LinkedIn Ads", fetch_linkedin_campaigns, delays)
+                log.info("Pulled %d live LinkedIn Ads campaign(s)", len(linkedin_rows))
+                live_raw += linkedin_rows
+                fetched.add("linkedin")
+            except FileNotFoundError as e:
+                log.warning("LinkedIn Ads credentials not found (%s) -- carrying LinkedIn forward", e)
+            except KeyError as e:
+                log.warning("LinkedIn Ads .env missing a required key (%s) -- carrying LinkedIn forward", e)
+            except Exception as e:  # noqa: BLE001 -- per-platform fail-soft, by design
+                log.warning("LinkedIn Ads campaign pull failed (%s) -- carrying LinkedIn forward", e)
+
+    # (iv) Nothing fetched -> nothing new to say; the prior snapshot stands.
+    if not fetched:
+        log.error("REGISTRY_REFRESH: no platform could be fetched -- no snapshot written.")
+        return 1
+
+    now = datetime.now(UTC)
+    merged, report = merge_refresh(prior_rows, live_raw, fetched, snapshot_date, now)
+    suspect = _suspect_partial_platforms(report, fetched, ratio)
+    accepted = suspect & set(args.accept_partial or ())
+    for p in sorted(accepted):
+        c = report["by_platform"][p]
+        log.warning("%s listing is missing %d of its %d prior not-archived campaign(s) -- "
+                    "accepted via --accept-partial %s: archiving them.",
+                    p, c["disappeared"], c["prior_not_archived"], p)
+    suspect -= accepted
+    if suspect:
+        for p in sorted(suspect):
+            c = report["by_platform"][p]
+            log.warning("LOUD WARNING: %s listing looks PARTIAL -- %d of its %d prior "
+                        "not-archived campaign(s) are missing (min-retain-ratio %.2f). "
+                        "Carrying %s forward unchanged instead of archiving them. If they "
+                        "really were removed, accept it once with --accept-partial %s "
+                        "(run_daily.sh: REGISTRY_ACCEPT_PARTIAL=%s).",
+                        p, c["disappeared"], c["prior_not_archived"], ratio, p, p, p)
+        fetched -= suspect
+        live_raw = [r for r in live_raw if r.get("platform") not in suspect]
+        if not fetched:
+            log.error("REGISTRY_REFRESH: every fetched platform looked partial -- "
+                      "no snapshot written.")
+            return 1
+        merged, report = merge_refresh(prior_rows, live_raw, fetched, snapshot_date, now)
+
+    # (v) Shrink guard. Carry-forward makes len(merged) >= prior by
+    # construction, so this only fires on a bug -- which is exactly when a
+    # write must not happen.
+    if report["prior_count"] and len(merged) < math.ceil(ratio * report["prior_count"]):
+        log.error("REGISTRY_REFRESH shrink guard: merged snapshot has %d row(s) vs %d "
+                  "prior (min-retain-ratio %.2f) -- refusing to write.",
+                  len(merged), report["prior_count"], ratio)
+        return 3
+
+    # Source per platform: fetched; partial / failed = REQUESTED but carried
+    # forward (-> exit 4 below); carried = not requested this run.
+    platforms = sorted({r.get("platform") for r in prior_rows + live_raw if r.get("platform")}
+                       | set(fetched) | requested)
+    sources = {p: ("fetched" if p in fetched else "partial" if p in suspect
+                   else "failed" if p in requested else "carried") for p in platforms}
+    degraded = sorted(requested - fetched)
+    out_md = (Path(args.out_md) if args.out_md
+              else config.STAGING_DIR / f"campaign_registry_refresh_{snapshot_date}.md")
+
+    # (vi) One complete snapshot -> today's partition (WRITE_TRUNCATE, so a
+    # same-day re-run replaces rather than duplicates).
+    try:
+        written = bq_writer.write_rows("campaign_registry", merged)
+    except Exception as e:  # noqa: BLE001 -- same contract as the backfill write below
+        log.error("Write to campaign_registry failed: %s", e)
+        out_md.parent.mkdir(parents=True, exist_ok=True)
+        out_md.write_text(render_refresh_markdown(merged, report, snapshot_date,
+                                                  prior_max, sources), encoding="utf-8")
+        log.info("Refresh report (failed write) written to %s", out_md)
+        return 1
+
+    # (vii) Change report (staging/ by default -- never the tracked backfill doc).
+    out_md.parent.mkdir(parents=True, exist_ok=True)
+    out_md.write_text(render_refresh_markdown(merged, report, snapshot_date,
+                                              prior_max, sources), encoding="utf-8")
+    if config.DRY_RUN:
+        log.info("DRY_RUN: preview written to %s (%d row(s))", _PREVIEW_PATH, len(merged))
+    else:
+        log.info("Wrote %d row(s) to BigQuery (campaign_registry).", written)
+    log.info("Refresh report written to %s", out_md)
+
+    # (viii) One grep-able summary line.
+    totals = _refresh_totals(report)
+    per_platform = " ".join(
+        f"{p}={sum(1 for r in merged if r.get('platform') == p)}" for p in platforms)
+    needs_attention = sum(1 for r in merged if _classified_view(r)["needs_attention"])
+    log.info("REGISTRY_REFRESH snapshot=%s total=%d %s %s needs_attention=%d sources=%s",
+             snapshot_date, len(merged), per_platform,
+             " ".join(f"{k}={v}" for k, v in totals.items()), needs_attention,
+             ",".join(f"{p}:{s}" for p, s in sources.items()))
+
+    # (ix) Degraded -> non-zero, so it is never silent. The snapshot above is
+    # still complete and valid (the chain can run on it), but its advanced
+    # snapshot_date would otherwise hide a platform frozen at its prior state
+    # from every MAX(snapshot_date) freshness check.
+    if degraded:
+        log.error("REGISTRY_REFRESH DEGRADED: requested platform(s) %s carried forward "
+                  "unchanged (%s) -- the snapshot was written, but their new, renamed and "
+                  "status-changed campaigns are missing from it. Exit 4.",
+                  ",".join(degraded), ", ".join(f"{p}:{sources[p]}" for p in degraded))
+        return 4
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -612,9 +1434,75 @@ def parse_args(argv=None):
                          "both APIs entirely (for testing without credentials).")
     p.add_argument("--snapshot-date", type=str, default=None,
                     help="Snapshot date YYYY-MM-DD (default: today IST).")
-    p.add_argument("--out-md", type=str, default=str(DEFAULT_MD_PATH),
-                    help=f"Markdown report output path (default: {DEFAULT_MD_PATH}).")
+    # Default resolved in main(): DEFAULT_MD_PATH for a backfill, a staging/
+    # file for --refresh (so a weekly run never dirties the tracked doc).
+    p.add_argument("--out-md", type=str, default=None,
+                    help=f"Markdown report output path (default: {DEFAULT_MD_PATH}; "
+                         f"with --refresh: staging/campaign_registry_refresh_<date>.md).")
+    p.add_argument("--refresh", action="store_true",
+                    help="Weekly carry-forward refresh: merge the live listing onto the "
+                         "prior registry instead of a one-shot backfill.")
+    p.add_argument("--prior-fixture", type=str, default=None,
+                    help="--refresh only (tests): load the prior registry rows from this "
+                         "JSON file (bare list or {rows: [...]}) instead of BQ/staging.")
+    p.add_argument("--only-if-stale-days", type=int, default=None,
+                    help="--refresh only: exit 0 without any API call unless the latest "
+                         "prior snapshot is at least N days older than --snapshot-date.")
+    p.add_argument("--min-retain-ratio", type=float, default=None,
+                    help="--refresh only (default 0.9): refuse to write a snapshot smaller "
+                         "than this fraction of the prior one, and carry forward a platform "
+                         "whose listing lost more than (1 - ratio) of its prior campaigns.")
+    p.add_argument("--accept-partial", action="append", choices=("google", "linkedin"),
+                    default=None, metavar="PLATFORM",
+                    help="--refresh only, repeatable: this platform's listing really did "
+                         "lose that many campaigns -- archive them instead of tripping the "
+                         "partial-listing guard (and exiting 4). Use for one run, not "
+                         "permanently.")
+    p.add_argument("--force-backfill", action="store_true",
+                    help="Backfill only (no --refresh): allow a LIVE backfill even though "
+                         "campaign_registry already has rows. It replaces today's partition "
+                         "with ONLY the requested platforms, every classification re-derived "
+                         "from the names -- and registry.py/the dashboard read only the "
+                         "latest snapshot. Prefer --refresh.")
     return p.parse_args(argv)
+
+
+def _live_registry_state() -> tuple[int, date | None]:
+    """(row count, MAX(snapshot_date)) of the live campaign_registry. Same
+    client/allowlist as _load_prior_rows_from_bq(). Raises on any failure."""
+    table_id = bq_writer.validate_target("campaign_registry")
+    client = bq_writer.get_client()          # lazy bigquery import inside bq_writer
+    query = f"SELECT COUNT(*) AS n, MAX(snapshot_date) AS latest FROM `{table_id}`"
+    rows = [dict(r.items()) for r in client.query(query).result(timeout=120)]
+    if not rows:
+        return 0, None
+    return int(rows[0].get("n") or 0), _as_date(rows[0].get("latest"))
+
+
+def _live_backfill_guard(force: bool) -> int:
+    """0 if a LIVE backfill may write, else the exit code. A backfill has no
+    carry-forward, so over an existing registry it would make a partial,
+    re-classified snapshot the latest one (see the module docstring)."""
+    if force:
+        log.warning("--force-backfill: skipping the existing-registry check. Today's "
+                    "campaign_registry partition will hold ONLY the platforms requested "
+                    "here, with every classification re-derived from the names.")
+        return 0
+    try:
+        n, latest = _live_registry_state()
+    except Exception as e:  # noqa: BLE001 -- any read failure means "do not write"
+        log.error("BACKFILL aborted: could not confirm campaign_registry is empty (%s) -- "
+                  "refusing a live backfill. If the table really does not exist yet, "
+                  "pass --force-backfill.", e)
+        return 2
+    if n:
+        log.error("BACKFILL refused: campaign_registry already holds %d row(s) (latest "
+                  "snapshot %s). A backfill has no carry-forward and re-derives every "
+                  "classification, and registry.py + the dashboard read only the latest "
+                  "snapshot -- use --refresh instead (or --force-backfill to overwrite "
+                  "deliberately).", n, latest)
+        return 3
+    return 0
 
 
 def main(argv=None) -> int:
@@ -632,6 +1520,26 @@ def main(argv=None) -> int:
             return 1
     else:
         snapshot_date = date.fromisoformat(bq_writer.run_date_today_ist())
+
+    if args.refresh:
+        if args.force_backfill:
+            log.error("--force-backfill only applies without --refresh.")
+            return 1
+        return _main_refresh(args, snapshot_date)
+    if (args.prior_fixture or args.only_if_stale_days is not None
+            or args.min_retain_ratio is not None or args.accept_partial):
+        log.error("--prior-fixture/--only-if-stale-days/--min-retain-ratio/--accept-partial "
+                  "only apply with --refresh.")
+        return 1
+    if args.out_md is None:
+        args.out_md = str(DEFAULT_MD_PATH)
+
+    # A live backfill may only seed an EMPTY registry -- checked before any
+    # ad-platform API call. DRY_RUN only writes the local preview.
+    if not config.DRY_RUN:
+        rc = _live_backfill_guard(args.force_backfill)
+        if rc:
+            return rc
 
     raw_campaigns: list[dict] = []
 

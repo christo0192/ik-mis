@@ -1,6 +1,7 @@
 import "server-only";
 
 import { CE_TABLES, PMIS_TABLES, safeQuery, type SafeResult } from "@/lib/bq";
+import { rollUpRunStatus, type FreshnessTable } from "@/lib/health";
 
 /**
  * SERVER-ONLY query layer for the MIS Generation department's `ce_*` tables
@@ -206,7 +207,8 @@ export interface CampaignAssetSummary {
 }
 
 export interface CeFreshnessRow {
-  table: string;
+  /** Typed against health.ts FRESHNESS_SLA so every freshness label must carry its own cadence SLA. */
+  table: FreshnessTable;
   latest_date: string | null;
 }
 
@@ -981,8 +983,11 @@ export async function getLeadQualityHeadline(): Promise<
 // Pipeline freshness (Home vital-sign: N healthy / N stale / N failed)
 // ---------------------------------------------------------------------------
 
-/** table label -> (fully-qualified table, partition column). Mirrors generation/schemas.py PARTITION_FIELDS. */
-const FRESHNESS_SOURCES: Array<[label: string, table: string, col: string]> = [
+/**
+ * table label -> (fully-qualified table, partition column). Mirrors generation/schemas.py PARTITION_FIELDS.
+ * The label is a FreshnessTable, so adding a source here without an SLA entry in health.ts fails `tsc`.
+ */
+const FRESHNESS_SOURCES: Array<[label: FreshnessTable, table: string, col: string]> = [
   ["campaign_registry", CE_TABLES.campaignRegistry, "snapshot_date"],
   ["keyword_candidates", CE_TABLES.keywordCandidates, "run_date"],
   ["keyword_rejects", CE_TABLES.keywordRejects, "run_date"],
@@ -998,7 +1003,7 @@ const FRESHNESS_SOURCES: Array<[label: string, table: string, col: string]> = [
 /**
  * MAX(partition column) per Generation-dept table. Each table is queried
  * independently (not one UNION ALL) so one missing table doesn't blank out
- * freshness for the other eleven.
+ * freshness for the other nine.
  */
 export async function getCeFreshness(): Promise<CeFreshnessRow[]> {
   const results = await Promise.all(
@@ -1015,14 +1020,24 @@ export async function getCeFreshness(): Promise<CeFreshnessRow[]> {
   return results;
 }
 
-/** Latest generation_runs.status, used to fold a hard pipeline failure into the Home health tile. */
+/**
+ * Rolled-up generation_runs.status for the latest run_date, used to fold a
+ * hard pipeline failure into the Home health tile and the graph.
+ *
+ * Every row of that day is read and reduced with rollUpRunStatus (worst
+ * wins). One generate_assets run writes three rows (keyword / copy / angle)
+ * that share a run_id, so picking a single row (the old `ORDER BY run_id DESC
+ * LIMIT 1`) returned an arbitrary path and could show a failed run as
+ * healthy. Runs within a day cannot be ordered either: run_id ends in random
+ * hex and the table has no timestamp. So a failure earlier in the day stays
+ * "failed" until the next day's run, even after a successful same-day re-run.
+ * That is a false alarm the operator can explain; hiding a failure is worse.
+ */
 export async function getLatestGenerationRunStatus(): Promise<string | null> {
   const result = await safeQuery<{ status: unknown }>(
     `SELECT status FROM \`${CE_TABLES.generationRuns}\`
-      WHERE run_date = (SELECT MAX(run_date) FROM \`${CE_TABLES.generationRuns}\`)
-      ORDER BY run_id DESC
-      LIMIT 1`,
+      WHERE run_date = (SELECT MAX(run_date) FROM \`${CE_TABLES.generationRuns}\`)`,
   );
-  if (result.error || result.rows.length === 0) return null;
-  return str(result.rows[0].status);
+  if (result.error) return null;
+  return rollUpRunStatus(result.rows.map((r) => str(r.status)));
 }

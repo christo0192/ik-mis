@@ -9,7 +9,10 @@ Server Components — never a Client Component.
 
 ## Prerequisites
 
-- Node.js 20+ (developed on Node 24)
+- Node.js 24.x — pinned by `engines` in `package.json`, which Vercel reads as
+  the production runtime and which must match the `node-version` in the
+  dashboard job of `.github/workflows/ci.yml` (`npm test` also needs >=22.18
+  for native TypeScript type stripping)
 - Read access to the `ik-marketing-data.Market_Research` BigQuery dataset
 
 ## Run locally

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { SectionHeading } from "@/components/ui/misc";
 import { SystemGraph } from "@/components/system-graph";
 import { cn, formatDate, formatINR } from "@/lib/format";
-import { HEALTH_STYLE, healthOf, type Health } from "@/lib/health";
+import { cadenceLabel, HEALTH_STYLE, judgeFreshness, type Health } from "@/lib/health";
 import {
   getCeFreshness,
   getLatestGenerationRunStatus,
@@ -11,7 +11,9 @@ import {
   getReviewQueuePressure,
   getUnregisteredCampaigns,
   getValueLedgerHeadline,
+  type CeFreshnessRow,
 } from "@/lib/ce-queries";
+import { getPmisFreshness } from "@/lib/pmis-queries";
 import { buildSystemGraph } from "@/lib/graph";
 
 export const dynamic = "force-dynamic";
@@ -57,24 +59,41 @@ function VitalTile({
 }
 
 export default async function HomePage() {
-  const [freshness, lastRunStatus, pressure, ledger, leadQuality, unregistered, graph] =
+  // One run-status fetch shared by the strip below and the graph, so a render
+  // can't show "failed" in one and "healthy" in the other.
+  const runStatus = getLatestGenerationRunStatus();
+  const [freshness, pmisLatest, lastRunStatus, pressure, ledger, leadQuality, unregistered, graph] =
     await Promise.all([
       getCeFreshness(),
-      getLatestGenerationRunStatus(),
+      getPmisFreshness(),
+      runStatus,
       getReviewQueuePressure(),
       getValueLedgerHeadline(),
       getLeadQualityHeadline(),
       getUnregisteredCampaigns(),
-      buildSystemGraph(),
+      buildSystemGraph(runStatus),
     ]);
 
-  const healths = freshness.map((f) => ({
-    ...f,
-    health:
-      f.table === "generation_runs" && lastRunStatus === "failed"
-        ? ("failed" as Health)
-        : healthOf(f.latest_date),
-  }));
+  // pmis_daily_segment_facts has no system-graph node — it only rolls up into
+  // the Performance department — so when it froze at 2026-10-15 (LinkedIn API
+  // version sunset, 2026-10-27 incident) Performance went amber with no visible
+  // stale child. Listing it beside the ce_* tables (and in the Pipeline Health
+  // counts, which read the same list) makes the cause visible. It stays out of
+  // ce-queries.ts FRESHNESS_SOURCES because that list mirrors the Generation
+  // pipeline's own ce_* schemas; this reuses the same getPmisFreshness query
+  // the graph already runs.
+  const tables: CeFreshnessRow[] = [
+    ...freshness,
+    { table: "pmis_daily_segment_facts", latest_date: pmisLatest },
+  ];
+
+  // Every tile is judged against its own cadence SLA on one clock reading;
+  // a failed latest generation run still overrides generation_runs' health.
+  const healths = judgeFreshness(tables).map((h) =>
+    h.table === "generation_runs" && lastRunStatus === "failed"
+      ? { ...h, health: "failed" as Health, detail: `latest run failed · ${h.detail}` }
+      : h,
+  );
   const healthyCount = healths.filter((h) => h.health === "healthy").length;
   const staleCount = healths.filter((h) => h.health === "stale").length;
   const failedCount = healths.filter((h) => h.health === "failed").length;
@@ -219,7 +238,7 @@ export default async function HomePage() {
       <section>
         <SectionHeading
           title="Table Freshness"
-          description="MAX(run_date / snapshot_date) per Generation-dept table. Unreachable tables show as “no data yet”, never as zero."
+          description="MAX(run_date / snapshot_date / date) per Generation-dept table, plus the PMIS segment facts behind Performance. Each table is judged against its own cadence SLA (daily / weekly / on demand); hover a tile for details. Unreachable tables show as “no data yet”, never as zero."
         />
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           {healths.map((h) => {
@@ -227,6 +246,7 @@ export default async function HomePage() {
             return (
               <div
                 key={h.table}
+                title={h.detail}
                 className="flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2.5"
               >
                 <span className={cn("h-2 w-2 shrink-0 rounded-full", style.dot)} />
@@ -237,6 +257,7 @@ export default async function HomePage() {
                   <p className={cn("text-[11px]", style.text)}>
                     {h.latest_date ? formatDate(h.latest_date) : style.label}
                   </p>
+                  <p className="truncate text-[10px] text-muted">{cadenceLabel(h.table)}</p>
                 </div>
               </div>
             );

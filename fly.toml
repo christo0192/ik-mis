@@ -10,7 +10,24 @@
 #         duration, roughly once a day)
 #
 # Deploy FROM THE MIS REPO ROOT:
-#   fly deploy . --config fly.toml --dockerfile fly-deploy/Dockerfile
+#   fly deploy . --config fly.toml --dockerfile fly-deploy/Dockerfile --ha=false
+#
+# The app must have exactly ONE machine: e820794c74d708, the machine the
+# Cloudflare Worker starts (its FLY_MACHINE_ID). --ha=false (2026-10-27)
+# stops flyctl from (re)creating the default HA standby -- a second machine
+# is never the cron target, only a confusing stopped copy (18514d5c651ee8
+# was one). Deploy only while that machine is stopped (the daily run is
+# ~11:00-14:30 IST): strategy=immediate below would kill a run in progress.
+#
+# Weekly campaign-registry refresh (run_daily.sh step 2b): its env knobs
+# (REGISTRY_REFRESH_ENABLED / FORCE_REGISTRY_REFRESH / REGISTRY_STALE_DAYS /
+# REGISTRY_REFRESH_TIMEOUT_S / REGISTRY_ACCEPT_PARTIAL) default inside
+# run_daily.sh and are NOT set here -- REGISTRY_ACCEPT_PARTIAL in particular
+# is a one-run override, never a standing setting. LinkedIn needs the
+# LINKEDIN_ENV_B64 secret APPLIED (a `--stage`d one only reaches the machine
+# after `flyctl secrets deploy` or the next deploy); without it every run's
+# Slack digest flags registry_refresh_linkedin(creds-absent) (see
+# fly-deploy/entrypoint.sh) unless REGISTRY_LINKEDIN_OPTIONAL=true.
 
 app = 'ik-ad-generator'
 primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom had no capacity 2026-06-05)

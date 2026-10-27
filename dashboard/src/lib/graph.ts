@@ -3,7 +3,7 @@ import "server-only";
 import { getCeFreshness, getLatestGenerationRunStatus, getReviewQueuePressure } from "@/lib/ce-queries";
 import { getMarketResearchFreshness } from "@/lib/queries";
 import { getPmisFreshness } from "@/lib/pmis-queries";
-import { healthOf, worstHealth, type Health } from "@/lib/health";
+import { freshnessDetail, healthOf, worstHealth, type FreshnessTable, type Health } from "@/lib/health";
 
 /**
  * Server-side builder for the Home page's system graph (docs/dashboard-vision.md
@@ -54,31 +54,42 @@ export interface SystemGraphData {
   bots: DeptBot[];
 }
 
-function detailFor(latestDate: string | null, health: Health): string {
-  if (health === "unknown") return "no data yet";
-  return `last updated ${latestDate}`;
-}
-
-export async function buildSystemGraph(): Promise<SystemGraphData> {
+/**
+ * `runStatus` lets the Home page hand in the same in-flight
+ * getLatestGenerationRunStatus() promise its Pipeline Health strip awaits, so
+ * the strip and the graph read one result per render and cannot disagree on
+ * whether the latest generation run failed.
+ */
+export async function buildSystemGraph(
+  runStatus: Promise<string | null> = getLatestGenerationRunStatus(),
+): Promise<SystemGraphData> {
   const [ceFreshness, mrFreshness, pmisLatest, lastRunStatus, reviewPressure] = await Promise.all([
     getCeFreshness(),
     getMarketResearchFreshness(),
     getPmisFreshness(),
-    getLatestGenerationRunStatus(),
+    runStatus,
     getReviewQueuePressure(),
   ]);
 
   const ceByTable = new Map(ceFreshness.map((f) => [f.table, f.latest_date]));
   const mrByTable = new Map(mrFreshness.map((f) => [f.table, f.latest_date]));
 
-  const healthFor = (latest: string | null) => healthOf(latest);
+  // Each table is judged against its own cadence SLA (health.ts
+  // FRESHNESS_SLA, 2026-10-27) rather than one global 8-day threshold, and
+  // every node reads the same clock so two tables on the same date can't
+  // straddle a boundary within one render.
+  const now = Date.now();
+  const healthFor = (latest: string | null, table: FreshnessTable) => healthOf(latest, table, now);
+  // Tooltip: last update + expected cadence/SLA (+ age once overdue). Reads
+  // "no data yet" exactly when healthFor reads "unknown" (missing/invalid date).
+  const detailFor = (latest: string | null, table: FreshnessTable) => freshnessDetail(latest, table, now);
 
   // generation_runs carries an explicit status; a hard "failed" folds into
   // that table's health regardless of how recent the failed run was (a
   // same-day failed run is still a failure, not "fresh").
   const generationRunsLatest = ceByTable.get("generation_runs") ?? null;
   const generationRunsHealth: Health =
-    lastRunStatus === "failed" ? "failed" : healthFor(generationRunsLatest);
+    lastRunStatus === "failed" ? "failed" : healthFor(generationRunsLatest, "generation_runs");
 
   const socialLatest = mrByTable.get("social_trends") ?? null;
   const jobsLatest = mrByTable.get("job_market_demand") ?? null;
@@ -91,17 +102,20 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
   const rejectsLatest = ceByTable.get("keyword_rejects") ?? null;
   const ledgerLatest = ceByTable.get("value_ledger") ?? null;
 
-  const socialHealth = healthFor(socialLatest);
-  const jobsHealth = healthFor(jobsLatest);
-  const kwPerfHealth = healthFor(kwPerfLatest);
-  const leadQualityHealth = healthFor(leadQualityLatest);
-  const pmisHealth = healthFor(pmisLatest);
-  const registryHealth = healthFor(registryLatest);
-  const keywordHealth = healthFor(keywordLatest);
-  const copyHealth = healthFor(copyLatest);
-  const anglesHealth = healthFor(anglesLatest);
-  const rejectsHealth = healthFor(rejectsLatest);
-  const ledgerHealth = healthFor(ledgerLatest);
+  const socialHealth = healthFor(socialLatest, "social_trends");
+  const jobsHealth = healthFor(jobsLatest, "job_market_demand");
+  const kwPerfHealth = healthFor(kwPerfLatest, "kw_search_term_perf");
+  const leadQualityHealth = healthFor(leadQualityLatest, "lead_quality_scores");
+  // pmis has no node of its own (it only rolls into Performance below); the
+  // Home "Table Freshness" strip lists it so a stale Performance always has a
+  // visible stale child.
+  const pmisHealth = healthFor(pmisLatest, "pmis_daily_segment_facts");
+  const registryHealth = healthFor(registryLatest, "campaign_registry");
+  const keywordHealth = healthFor(keywordLatest, "keyword_candidates");
+  const copyHealth = healthFor(copyLatest, "ad_copy_drafts");
+  const anglesHealth = healthFor(anglesLatest, "audience_angles");
+  const rejectsHealth = healthFor(rejectsLatest, "keyword_rejects");
+  const ledgerHealth = healthFor(ledgerLatest, "value_ledger");
 
   // "Review queue" isn't its own BQ table — it's the human-review step over
   // keyword_candidates + ad_copy_drafts + audience_angles. Its health is the
@@ -157,7 +171,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "intelligence",
       kind: "table",
       health: socialHealth,
-      detail: detailFor(socialLatest, socialHealth),
+      detail: detailFor(socialLatest, "social_trends"),
       href: "/intelligence/social",
     },
     {
@@ -166,7 +180,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "intelligence",
       kind: "table",
       health: jobsHealth,
-      detail: detailFor(jobsLatest, jobsHealth),
+      detail: detailFor(jobsLatest, "job_market_demand"),
       href: "/intelligence/jobs",
     },
 
@@ -177,7 +191,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "performance",
       kind: "table",
       health: kwPerfHealth,
-      detail: detailFor(kwPerfLatest, kwPerfHealth),
+      detail: detailFor(kwPerfLatest, "kw_search_term_perf"),
       href: "/performance",
     },
     {
@@ -186,7 +200,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "performance",
       kind: "table",
       health: leadQualityHealth,
-      detail: detailFor(leadQualityLatest, leadQualityHealth),
+      detail: detailFor(leadQualityLatest, "lead_quality_scores"),
       href: "/performance",
     },
 
@@ -197,7 +211,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "generation",
       kind: "table",
       health: registryHealth,
-      detail: detailFor(registryLatest, registryHealth),
+      detail: detailFor(registryLatest, "campaign_registry"),
       href: "/registry",
     },
     {
@@ -206,7 +220,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "generation",
       kind: "table",
       health: keywordHealth,
-      detail: detailFor(keywordLatest, keywordHealth),
+      detail: detailFor(keywordLatest, "keyword_candidates"),
       href: "/generation?tab=keywords",
     },
     {
@@ -215,7 +229,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "generation",
       kind: "table",
       health: copyHealth,
-      detail: detailFor(copyLatest, copyHealth),
+      detail: detailFor(copyLatest, "ad_copy_drafts"),
       href: "/generation?tab=copy",
     },
     {
@@ -236,7 +250,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "generation",
       kind: "table",
       health: rejectsHealth,
-      detail: detailFor(rejectsLatest, rejectsHealth),
+      detail: detailFor(rejectsLatest, "keyword_rejects"),
       href: "/generation?tab=rejects",
     },
     {
@@ -245,7 +259,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
       dept: "generation",
       kind: "table",
       health: ledgerHealth,
-      detail: detailFor(ledgerLatest, ledgerHealth),
+      detail: detailFor(ledgerLatest, "value_ledger"),
       href: "/runs",
     },
   ];
@@ -304,7 +318,7 @@ export async function buildSystemGraph(): Promise<SystemGraphData> {
         activity: "fixing",
         health: deptHealth,
         href,
-        reason: deptHealth === "failed" ? "a pipeline run failed" : "data hasn't refreshed recently",
+        reason: deptHealth === "failed" ? "a pipeline run failed" : "data is past its freshness SLA",
       };
     }
     if (executing) {

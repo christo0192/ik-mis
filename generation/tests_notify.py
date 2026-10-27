@@ -229,6 +229,36 @@ def test_cli_end_to_end_dry_run():
         check(result.returncode == 0, f"CLI exits 0, stderr={result.stderr[-500:]}")
         check("[DRY RUN]" in result.stdout, "CLI dry-run output is clearly labeled")
         check(ns.DASHBOARD_URL in result.stdout, "CLI output includes the dashboard link")
+        check(":warning:" not in result.stdout,
+              "CLI without --soft-failure renders no fail-soft warning")
+
+        # run_daily.sh's exact passthrough: one --soft-failure per failed step
+        result = subprocess.run(
+            [sys.executable, str(HERE / "notify_slack.py"),
+             "--from-fixture", str(fixture_path), "--run-date", "2026-07-04", "--dry-run",
+             "--soft-failure", "registry_refresh(exit=4)"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        main_part = result.stdout.split("--- thread reply ---")[0]
+        check(result.returncode == 0
+              and "Fail-soft step(s) failed this run: registry_refresh(exit=4)" in main_part,
+              f"CLI --soft-failure flags the degraded step in the MAIN message "
+              f"(rc={result.returncode}, stderr={result.stderr[-300:]})")
+
+
+# ===========================================================================
+# 8. fail-soft steps surfaced (run_daily.sh --soft-failure passthrough)
+# ===========================================================================
+def test_render_soft_failures():
+    digest = ns.build_digest("2026-07-04", FULL_FIXTURE)
+    main_message, _thread = ns.render_digest_text(digest)
+    check(":warning:" not in main_message,
+          "no soft_failures key -> no fail-soft warning line (unchanged digest)")
+    digest["soft_failures"] = ["registry_refresh(exit=4)", "other_step(exit=1)"]
+    main_message, _thread = ns.render_digest_text(digest)
+    check(":warning: Fail-soft step(s) failed this run: registry_refresh(exit=4), "
+          "other_step(exit=1)" in main_message and ns.DASHBOARD_URL in main_message,
+          "soft_failures render as one warning line in the main message, link kept")
 
 
 def main():
@@ -240,6 +270,7 @@ def main():
     test_post_digest_dry_run_prints_and_returns_zero()
     test_module_has_no_bq_write_calls()
     test_cli_end_to_end_dry_run()
+    test_render_soft_failures()
     print("\nAll notify_slack tests passed.")
 
 

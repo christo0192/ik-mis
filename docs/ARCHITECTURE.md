@@ -204,8 +204,19 @@ reality before trusting it, and let a reviewer try to break every piece before i
 
 At 10:00 IST, the money brain runs, as it always has. At 11:00, a tiny Cloudflare timer
 nudges a sleeping machine awake in Singapore. It pulls yesterday's search terms — all ten
-thousand of them — refreshes the campaign registry, and on Mondays recomputes what a
-quality lead actually costs, segment by segment. Then it wakes its strategist: one model
+thousand of them — and recomputes what a quality lead actually costs, segment by segment.
+Once a week (Mondays IST, or on any day the registry's latest snapshot is more than a week
+old) it also re-lists every live campaign and writes a fresh, *complete* registry
+snapshot: new campaigns auto-classified, renames and status changes picked up, hand-made
+classifications carried forward, and any platform it couldn't reach (after a couple of
+retries) carried over unchanged rather than dropped. That step is the one that's allowed
+to fail without stopping the day — last week's snapshot is still whole, so the day's
+generation goes on — but never silently: a failure, a platform it had to carry over, or
+missing LinkedIn credentials (flagged on every run until they're fixed, unless
+Google-only is switched on deliberately) shows up in the run log and in the Slack digest.
+(Until 2026-10-27
+the registry was a one-shot July backfill that never refreshed.) Then it wakes its
+strategist: one model
 call that reads the week's market signals and the quality-lead math, and proposes keywords
 like `"ai engineer interview preparation course"` — each one carrying a citation, like a
 scientist forced to show sources: *"62 postings, 16 flagged emerging."* A second call

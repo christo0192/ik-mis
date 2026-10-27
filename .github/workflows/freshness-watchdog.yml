@@ -1,0 +1,155 @@
+# Freshness watchdog -- M001 T05 (pipeline-freshness incident, verified 2026-10-27).
+#
+# Once a day, reads MAX(<date col>) for every pipeline table in BigQuery
+# (SELECT-only) and posts to Slack when any table is older than its SLA, or
+# when an EXPIRIES calendar deadline is within 30 days. See ops/README.md.
+#
+# Schedule: 10:30 UTC = 16:00 IST -- after the anomaly run (~04:38 UTC) and the
+# generation digest (09:33 UTC at its latest observed), well before IST
+# midnight (18:30 UTC), so a late-starting GitHub cron cannot change "today".
+# Scheduled runs only fire from the default branch (main).
+#
+# Secrets (repo -> Settings -> Secrets and variables -> Actions):
+#   WATCHDOG_BQ_SA_JSON  service-account key JSON (BigQuery read + jobUser)
+#   SLACK_BOT_TOKEN      bot token with chat:write
+#   SLACK_CHANNEL_ID     channel id (#ib-perf)
+# Optional repo variable: WATCHDOG_MENTION (default <!here>; "none" disables).
+#
+# Inputs and secrets reach the script through env: only -- never through
+# ${{ }} interpolation inside run: (script-injection hardening).
+#
+# No unit-test step here, on purpose: ci.yml runs ops/tests_freshness_watchdog.py
+# on every PR and push to main. Gating this live run on them would let any red
+# test (a stale assertion, a drift guard) silently switch alerting off.
+name: freshness-watchdog
+
+on:
+  schedule:
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the Slack message in the log instead of posting it'
+        type: boolean
+        default: false
+      heartbeat:
+        description: 'All-green post when nothing is late (auto = Mondays IST only)'
+        type: choice
+        options: [auto, always, never]
+        default: auto
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freshness-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check 'google-cloud-bigquery>=3,<4'
+
+      - name: Run watchdog
+        env:
+          WATCHDOG_BQ_SA_JSON: ${{ secrets.WATCHDOG_BQ_SA_JSON }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          WATCHDOG_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          HEARTBEAT: ${{ inputs.heartbeat || 'auto' }}
+          WATCHDOG_MENTION: ${{ vars.WATCHDOG_MENTION || '<!here>' }}
+        # `timeout 8m`: a hang (e.g. a BigQuery outage past the script's own
+        # FETCH_BUDGET_S) becomes exit 124 -- a job *failure* -- before the
+        # 10-minute job timeout would end the run as cancelled.
+        run: timeout 8m python ops/freshness_watchdog.py --heartbeat "$HEARTBEAT"
+
+  # ik-mis went public on 2026-10-27. GitHub auto-disables scheduled workflows
+  # in public repos after 60 days without repository activity, which would
+  # switch this watchdog off silently. Re-enabling the workflow through the
+  # REST API resets that inactivity timer (the keepalive-workflow action's API
+  # mode) without pushing commits. Like that action, it only fires once the
+  # last commit is 45+ days old: GitHub sends scheduled-run notifications to
+  # whoever last re-enabled the workflow, so a daily re-enable by
+  # github-actions[bot] would move them off a human for no reason (the
+  # alert-on-failure job below no longer depends on them either way). If the
+  # commit date can't be read it re-enables anyway (fail safe). Separate job so
+  # the write-scoped token never touches the watchdog step, and so a keepalive
+  # hiccup can't mask a watchdog failure (or vice versa).
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Re-enable this workflow once the repo is 45+ days quiet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          last=$(gh api "repos/$REPO/commits?per_page=1" --jq '.[0].commit.committer.date' || true)
+          age=999
+          if [ -n "$last" ] && last_s=$(date -u -d "$last" +%s); then
+            age=$(( ($(date -u +%s) - last_s) / 86400 ))
+          fi
+          echo "last commit on the default branch: ${last:-unknown} (age ${age}d)"
+          if [ "$age" -lt 45 ]; then
+            echo "recent repository activity -- keepalive not needed yet"
+            exit 0
+          fi
+          gh api -X PUT "repos/$REPO/actions/workflows/freshness-watchdog.yml/enable"
+          echo "re-enabled freshness-watchdog.yml (resets the 60-day inactivity timer)"
+
+  # Backstop alert. GitHub's "run failed" email cannot be relied on: it goes
+  # to whoever GitHub treats as the workflow's actor (after a keepalive
+  # re-enable that can be github-actions[bot]), and a job that hits
+  # timeout-minutes ends as cancelled, which sends no failure email. So any
+  # non-success result of the watchdog OR the keepalive opens one issue
+  # assigned to the repo owner, or comments on it while it stays open. Issue
+  # assignment and @-mentions notify a human whoever triggered the run, and
+  # keep working when Slack or the BigQuery key is the broken part. Close the
+  # issue once fixed; the next failure opens a fresh one.
+  alert-on-failure:
+    needs: [watchdog, keepalive]
+    if: always() && (needs.watchdog.result != 'success' || needs.keepalive.result != 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the watchdog-failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          WATCHDOG_RESULT: ${{ needs.watchdog.result }}
+          KEEPALIVE_RESULT: ${{ needs.keepalive.result }}
+          EVENT: ${{ github.event_name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="freshness-watchdog is failing"
+          body="@$OWNER freshness-watchdog ($EVENT) did not succeed: watchdog=$WATCHDOG_RESULT, keepalive=$KEEPALIVE_RESULT.
+
+          Run: $RUN_URL
+
+          While this is open, stale MIS tables may NOT be reaching Slack. Read the run log (runbook: ops/README.md, \"Exit codes\"), fix the cause, then close this issue."
+          # A failed lookup falls through to create: a duplicate issue beats silence.
+          num=$(gh issue list --state open --limit 200 --json number,title \
+                  --jq "map(select(.title == \"$title\")) | .[0].number // empty" || true)
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --assignee "$OWNER" \
+              || gh issue create --title "$title" --body "$body"
+          fi

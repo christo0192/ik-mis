@@ -43,6 +43,9 @@ Usage:
     python3 notify_slack.py --no-dry-run                  # posts to Slack
     python3 notify_slack.py --run-date 2026-07-04
     python3 notify_slack.py --from-fixture /tmp/digest_fixture.json --no-dry-run
+    python3 notify_slack.py --soft-failure 'registry_refresh(exit=4)'
+                                       # run_daily.sh passes each fail-soft step that
+                                       # failed; the main message flags it
 """
 from __future__ import annotations
 
@@ -307,10 +310,18 @@ def render_digest_text(digest: dict) -> tuple[str, str]:
     # "0 candidates" headline claiming the run happened.
     any_data = bool(digest["by_path"]) or kw["total"] > 0 or copy_["total"] > 0
 
+    # Fail-soft steps run_daily.sh let the chain continue past (--soft-failure,
+    # e.g. "registry_refresh(exit=4)") -- in the MAIN message, so a degraded
+    # step is never visible only in the Fly logs.
+    soft = digest.get("soft_failures") or []
+    soft_line = (f":warning: Fail-soft step(s) failed this run: {', '.join(soft)} -- the "
+                 f"chain continued; check the run's Fly logs.") if soft else None
+
     main_lines = [
         f":robot_face: *Generation run digest -- {run_date_}*",
         f"Keywords: {kw['total']} candidates -- {copy_['total']} copy drafts generated"
         if any_data else f"No generation data found for {run_date_} yet.",
+        *([soft_line] if soft_line else []),
         f"<{digest['dashboard_url']}|Open the Mission Control review queue>",
     ]
     main_message = "\n".join(main_lines)
@@ -399,6 +410,10 @@ def parse_args(argv=None):
     p.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
                     help="Print the composed digest instead of posting to Slack "
                          "(default: true). Pass --no-dry-run to post for real.")
+    p.add_argument("--soft-failure", action="append", default=None, metavar="STEP",
+                    help="Repeatable: a fail-soft step that failed this run (run_daily.sh "
+                         "passes e.g. 'registry_refresh(exit=4)'); flagged in the main "
+                         "message.")
     return p.parse_args(argv)
 
 
@@ -414,6 +429,7 @@ def main(argv=None) -> int:
              run_date_, args.dry_run, args.from_fixture)
 
     digest = build_digest(run_date_, fixture)
+    digest["soft_failures"] = list(args.soft_failure or [])
     main_message, thread_detail = render_digest_text(digest)
     return post_digest(main_message, thread_detail, args.dry_run)
 

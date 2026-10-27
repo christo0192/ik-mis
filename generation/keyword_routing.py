@@ -87,12 +87,20 @@ def _is_search_campaign(campaign_name: str) -> bool:
 def resolve_program_campaign(program: str, segment: str, reg=None) -> tuple[str | None, str]:
     """Resolve the target (campaign_name, segment) for a program.
 
-    Priority: env pin -> a registry SEARCH campaign for the program (prefer one
-    matching `segment`, then a 'generic' one, then name order) -> (None, segment)
-    when the program has NO search campaign (caller keeps the candidate's
-    original campaign_name; keywords are never auto-routed to a non-search
-    channel). Returns the resolved campaign's own segment to keep
-    campaign<->segment consistent for attribution.
+    Priority: env pin -> a registry SEARCH campaign for the program (prefer an
+    ACTIVE one, then one matching `segment`, then a 'generic' one, then name
+    order) -> (None, segment) when the program has NO search campaign (caller
+    keeps the candidate's original campaign_name; keywords are never
+    auto-routed to a non-search channel). Returns the resolved campaign's own
+    segment to keep campaign<->segment consistent for attribution.
+
+    Active-first (2026-10-27): the registry is now refreshed weekly, so it
+    carries real paused/archived statuses, and the old ranking could route a
+    whole topic's keywords into a paused search campaign just because it
+    sorted first. Status only RANKS -- a paused/archived campaign is still
+    chosen when it's the program's only search campaign (that's still a
+    better proposal target than leaving the keyword unrouted). A missing
+    status (fixtures, pre-refresh rows) counts as active, as before.
     """
     pin = os.environ.get(_ENV_PIN.get(program, ""), "").strip()
     if pin:
@@ -110,6 +118,7 @@ def resolve_program_campaign(program: str, segment: str, reg=None) -> tuple[str 
     def rank(e):
         n = normalize(e.campaign_name)
         return (
+            0 if (e.status or "active") == "active" else 1,
             0 if (e.segment or "") == segment else 1,
             0 if "generic" in n else 1,
             e.campaign_name,

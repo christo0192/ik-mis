@@ -80,6 +80,37 @@ def test_resolve_program_campaign():
         del os.environ["KWP_EDGEUP_CAMPAIGN"]
 
 
+def test_resolve_prefers_active():
+    """2026-10-27: with weekly refreshes the registry carries real statuses.
+    An ACTIVE search campaign must outrank a paused/archived one even when
+    the paused one wins every other tie-break (segment match + 'generic'),
+    but a paused one is still chosen when it's the only search campaign."""
+    paused_best = RegistryEntry(
+        campaign_name="IK-IN_Search_NB_EdgeUp_Generic_AI_35-54", platform="google",
+        segment="NB", program="edgeup", status="paused")
+    active_other = RegistryEntry(
+        campaign_name="IK-IN_Search_CS_EdgeUp_AgenticAI", platform="google",
+        segment="CS", program="edgeup", status="active")
+    archived = RegistryEntry(
+        campaign_name="IK-IN_Search_NB_EdgeUp_Generic_Archived", platform="google",
+        segment="NB", program="edgeup", status="archived")
+    reg = {e.campaign_name: e for e in (paused_best, active_other, archived)}
+    c, s = kr.resolve_program_campaign("edgeup", "NB", reg)
+    check(c == "IK-IN_Search_CS_EdgeUp_AgenticAI" and s == "CS",
+          f"active search campaign outranks a paused segment-matching 'generic' one (got {c}, {s})")
+    only_inactive = {e.campaign_name: e for e in (paused_best, archived)}
+    c, _s = kr.resolve_program_campaign("edgeup", "NB", only_inactive)
+    check(c == "IK-IN_Search_NB_EdgeUp_Generic_AI_35-54",
+          f"with no active option, paused/archived campaigns are still ranked, not excluded (got {c})")
+    no_status = {e.campaign_name: e for e in (
+        RegistryEntry(campaign_name="IK-IN_Search_NB_EdgeUp_Generic_X", platform="google",
+                      segment="NB", program="edgeup"),
+        active_other)}
+    c, _s = kr.resolve_program_campaign("edgeup", "NB", no_status)
+    check(c == "IK-IN_Search_NB_EdgeUp_Generic_X",
+          f"a missing status counts as active (fixtures / pre-refresh rows) (got {c})")
+
+
 def test_route_by_topic():
     rows = [
         _row("machine learning course", "CS", "orig_ai"),
@@ -134,6 +165,7 @@ def test_fetch_active_keywords_failsoft():
 if __name__ == "__main__":
     test_is_ai_keyword()
     test_resolve_program_campaign()
+    test_resolve_prefers_active()
     test_route_by_topic()
     test_route_unresolved()
     test_exclude_running()
