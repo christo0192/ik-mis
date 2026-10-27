@@ -20,6 +20,7 @@ import {
   freshnessDetail,
   healthOf,
   judgeFreshness,
+  rollUpRunStatus,
   slaFor,
   worstHealth,
 } from "./health.ts";
@@ -322,6 +323,48 @@ describe("worstHealth (unchanged roll-up)", () => {
       healthOf("2026-10-15", "pmis_daily_segment_facts", NOW),
     ];
     assert.equal(worstHealth(performance), "stale");
+  });
+});
+
+describe("rollUpRunStatus (generation_runs latest-run status)", () => {
+  // One generate_assets run writes three rows (keyword / copy / angle) with
+  // the same run_id; the old `ORDER BY run_id DESC LIMIT 1` returned one of
+  // them arbitrarily, so a run with a failed copy path could read as healthy.
+  test("any failed path marks the run failed, whatever the row order", () => {
+    for (const rows of [
+      ["success", "failed", "failed"],
+      ["failed", "failed", "success"],
+      ["failed", "success", "failed"],
+      ["failed", "success", "success"],
+      ["partial", "partial", "failed"],
+    ]) {
+      assert.equal(rollUpRunStatus(rows), "failed", rows.join(","));
+    }
+  });
+
+  test("failed > partial > running > success", () => {
+    assert.equal(rollUpRunStatus(["partial", "success", "success"]), "partial");
+    assert.equal(rollUpRunStatus(["success", "partial", "failed"]), "failed");
+    assert.equal(rollUpRunStatus(["running", "success"]), "running");
+    assert.equal(rollUpRunStatus(["running", "partial"]), "partial");
+    assert.equal(rollUpRunStatus(["success", "success", "success"]), "success");
+  });
+
+  test("a failed run on the same day is not hidden by another run's success", () => {
+    // Morning failure + manual re-run share a run_date; run_id ends in random
+    // hex and there is no timestamp, so they can't be ordered — the day reads failed.
+    const morning = ["failed", "failed", "success"];
+    const rerun = ["success", "success", "success"];
+    assert.equal(rollUpRunStatus([...rerun, ...morning]), "failed");
+    assert.equal(rollUpRunStatus([...morning, ...rerun]), "failed");
+  });
+
+  test("ignores case and whitespace; null when no status is recognised", () => {
+    assert.equal(rollUpRunStatus([" Failed ", "SUCCESS"]), "failed");
+    assert.equal(rollUpRunStatus([null, "success"]), "success");
+    assert.equal(rollUpRunStatus([]), null);
+    assert.equal(rollUpRunStatus([null, undefined]), null);
+    assert.equal(rollUpRunStatus(["unexpected"]), null);
   });
 });
 

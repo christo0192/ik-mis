@@ -507,6 +507,84 @@ c = FakeClient(lambda q: [{"k": k, "d": None} for k in keys])
 check(all(v is None for v in fw.fetch_latest(c, fw.SPECS, project="p").values()),
       "fetch_latest: NULL MAX (empty table) -> None")
 
+
+# A BigQuery OUTAGE (review-2) must not fan out into one query per table, and
+# the read has a hard time budget: either way FreshnessQueryError -> exit 1
+# well before the workflow's job timeout. Name/attribute-alike stand-ins for
+# the google.api_core exceptions (the pure run has no google packages).
+class RetryError(Exception):            # google.api_core.exceptions.RetryError
+    pass
+
+
+class InternalServerError(Exception):   # GoogleAPICallError subclasses carry .code
+    code = 500
+
+
+class Forbidden(Exception):
+    code = 403
+
+    def __init__(self, msg, reason):
+        super().__init__(msg)
+        self.errors = [{"reason": reason}]
+
+
+for exc, label in [(RetryError("Timeout of 30.0s exceeded"), "RetryError"),
+                   (TimeoutError(), "TimeoutError (result() timeout)"),
+                   (InternalServerError("backendError"), "HTTP 500"),
+                   (Forbidden("Exceeded rate limits", "rateLimitExceeded"), "403 rateLimitExceeded")]:
+    c = FakeClient(lambda q, e=exc: e)
+    try:
+        fw.fetch_latest(c, fw.SPECS, project="p")
+        check(False, f"{label} on the UNION ALL raises")
+    except fw.FreshnessQueryError as err:
+        check(len(c.sqls) == 1 and "fallback skipped" in str(err),
+              f"fetch_latest: {label} on the UNION ALL -> FreshnessQueryError, no per-table fan-out")
+check(not fw._is_systemic(Forbidden("Access Denied", "accessDenied"))
+      and not fw._is_systemic(RuntimeError("404 Not found: Table")),
+      "fetch_latest: a per-table 403 accessDenied / 404 is NOT systemic (keeps the fallback)")
+
+
+def outage_at_third_table(q):
+    if "UNION ALL" in q:
+        return RuntimeError("400 Cannot query over tables in different locations")
+    return InternalServerError("backendError") if _key_of(q) == fw.SPECS[2].key else [
+        {"k": _key_of(q), "d": TODAY}]
+
+
+c = FakeClient(outage_at_third_table)
+try:
+    fw.fetch_latest(c, fw.SPECS, project="p")
+    check(False, "a 5xx inside the per-table fallback raises")
+except fw.FreshnessQueryError:
+    check(len(c.sqls) == 1 + 3, "fetch_latest: a 5xx mid-fallback stops the remaining per-table queries")
+
+
+class FakeClock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+clk = FakeClock()
+
+
+def slow(q):                             # every query "takes" 30s; the union is non-systemic
+    clk.t += 30
+    if "UNION ALL" in q:
+        return RuntimeError("400 Cannot query over tables in different locations")
+    return [{"k": _key_of(q), "d": TODAY}]
+
+
+c = FakeClient(slow)
+try:
+    fw.fetch_latest(c, fw.SPECS, project="p", budget_s=240, clock=clk)
+    check(False, "fetch_latest over budget raises")
+except fw.FreshnessQueryError as err:
+    check("240s budget" in str(err) and len(c.sqls) == 1 + 7 and clk.t <= 240 + 30,
+          f"fetch_latest: stops at its time budget ({len(c.sqls)} queries, {clk.t:.0f}s)")
+
 # build_client config errors (never reaches the google import)
 saved_env = dict(os.environ)
 
@@ -735,11 +813,36 @@ if WORKFLOW.exists():
           "workflow: every ${{ }} expression sits in an env: mapping, none inside run:")
     for name in ("WATCHDOG_BQ_SA_JSON", "SLACK_BOT_TOKEN", "SLACK_CHANNEL_ID"):
         check(f"{name}: ${{{{ secrets.{name} }}}}" in wf, f"workflow: secret {name} passed via env")
-    check("run: python ops/freshness_watchdog.py" in wf, "workflow: runs the watchdog")
+    run_m = re.search(r"run: timeout (\d+)m python ops/freshness_watchdog\.py", wf)
+    job_m = re.search(r"\n  watchdog:\n(?:    .*\n)*?    timeout-minutes: (\d+)", wf)
+    check(run_m is not None and job_m is not None, "workflow: runs the watchdog under `timeout <N>m`")
+    shell_s, job_s = int(run_m.group(1)) * 60, int(job_m.group(1)) * 60
+    # A hang must end as a job FAILURE (shell timeout, exit 124), never as the
+    # job-timeout "cancelled", and the script's own budget must fit inside it.
+    check(shell_s < job_s, f"workflow: shell timeout {shell_s}s < job timeout-minutes {job_s}s")
+    check(fw.FETCH_BUDGET_S + fw.QUERY_WORST_CASE_S < shell_s,
+          f"workflow: FETCH_BUDGET_S + QUERY_WORST_CASE_S "
+          f"({fw.FETCH_BUDGET_S}+{fw.QUERY_WORST_CASE_S}s) < shell timeout {shell_s}s")
     gating = [ln for ln in wf.splitlines()
               if "tests_freshness_watchdog" in ln and not ln.lstrip().startswith("#")]
     check(gating == [], "workflow: the live run is NOT gated on the unit tests (a red test must "
                         "never switch alerting off; ci.yml runs them)")
+    # Backstop alert: independent of GitHub's failure-email routing (which a
+    # bot re-enable can move to github-actions[bot]) and of timeouts.
+    alert = wf[wf.find("\n  alert-on-failure:\n"):] if "\n  alert-on-failure:\n" in wf else ""
+    check("needs: [watchdog, keepalive]" in alert
+          and "if: always() && (needs.watchdog.result != 'success' || "
+              "needs.keepalive.result != 'success')" in alert,
+          "workflow: alert-on-failure runs on ANY non-success watchdog/keepalive result "
+          "(failure, timeout-cancel)")
+    check("issues: write" in alert and "gh issue create" in alert and "gh issue comment" in alert
+          and '--assignee "$OWNER"' in alert and "@$OWNER" in alert
+          and "OWNER: ${{ github.repository_owner }}" in alert,
+          "workflow: alert-on-failure opens/updates an issue assigned to and @-mentioning the owner")
+    keep = wf[wf.find("\n  keepalive:\n"):wf.find("\n  alert-on-failure:\n")]
+    check('if [ "$age" -lt 45 ]' in keep and "age=999" in keep
+          and "actions/workflows/freshness-watchdog.yml/enable" in keep,
+          "workflow: keepalive re-enables only after 45 quiet days (fail-safe when the date is unknown)")
 else:
     print(f"SKIP: workflow drift guards ({WORKFLOW} not found)")
 
@@ -757,5 +860,46 @@ if CI_WORKFLOW.exists():
           "ci.yml: shell syntax checks both run_daily.sh and fly-deploy/entrypoint.sh")
 else:
     print(f"SKIP: ci.yml drift guards ({CI_WORKFLOW} not found)")
+
+# ---------------------------------------------------------------------------
+# _BoundedClient against the REAL google-cloud-bigquery retry machinery
+# (review-2). Only when the library is installed (the unit command adds it;
+# the stdlib-only run skips). No network: anonymous credentials, every HTTP
+# call stubbed to a 500 backendError, and a fake clock that advances only on
+# the library's own retry sleeps. With the library defaults one query alone
+# retried for ~1100 fake seconds; bounded, the whole read must give up within
+# one query's worst case.
+try:
+    from google.api_core import exceptions as gexc
+    from google.auth.credentials import AnonymousCredentials
+    from google.cloud import bigquery
+except ImportError:
+    print("SKIP: _BoundedClient outage simulation (google-cloud-bigquery not installed)")
+else:
+    import time as _time
+    real_client = bigquery.Client(project="p", credentials=AnonymousCredentials())
+    http_calls = [0]
+
+    def api_request(*a, **kw):
+        http_calls[0] += 1
+        raise gexc.InternalServerError("backendError", errors=[{"reason": "backendError"}])
+
+    real_client._connection.api_request = api_request
+    fake_now = [0.0]
+    real_monotonic, real_sleep = _time.monotonic, _time.sleep
+    _time.monotonic = lambda: fake_now[0]
+    _time.sleep = lambda s: fake_now.__setitem__(0, fake_now[0] + s)
+    raised = None
+    try:
+        fw.fetch_latest(fw._BoundedClient(real_client), fw.SPECS, project="p")
+    except Exception as exc:              # noqa: BLE001 -- asserted below
+        raised = exc
+    finally:
+        _time.monotonic, _time.sleep = real_monotonic, real_sleep
+    check(isinstance(raised, fw.FreshnessQueryError),
+          f"_BoundedClient: a sustained BigQuery 500 -> FreshnessQueryError ({fw._err(raised)})")
+    check(fake_now[0] <= fw.QUERY_WORST_CASE_S,
+          f"_BoundedClient: gives up after {fake_now[0]:.0f}s of retries ({http_calls[0]} HTTP "
+          f"calls), within QUERY_WORST_CASE_S={fw.QUERY_WORST_CASE_S}s")
 
 print("\nAll freshness watchdog tests passed.")

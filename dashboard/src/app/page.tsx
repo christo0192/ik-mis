@@ -59,16 +59,19 @@ function VitalTile({
 }
 
 export default async function HomePage() {
+  // One run-status fetch shared by the strip below and the graph, so a render
+  // can't show "failed" in one and "healthy" in the other.
+  const runStatus = getLatestGenerationRunStatus();
   const [freshness, pmisLatest, lastRunStatus, pressure, ledger, leadQuality, unregistered, graph] =
     await Promise.all([
       getCeFreshness(),
       getPmisFreshness(),
-      getLatestGenerationRunStatus(),
+      runStatus,
       getReviewQueuePressure(),
       getValueLedgerHeadline(),
       getLeadQualityHeadline(),
       getUnregisteredCampaigns(),
-      buildSystemGraph(),
+      buildSystemGraph(runStatus),
     ]);
 
   // pmis_daily_segment_facts has no system-graph node — it only rolls up into

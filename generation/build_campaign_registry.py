@@ -153,6 +153,7 @@ import math
 import os
 import re
 import sys
+import time
 import urllib.parse
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -207,12 +208,29 @@ def _resolve_linkedin_api_version(raw: str | None) -> str:
 
 LINKEDIN_API_VERSION = _resolve_linkedin_api_version(os.environ.get("LINKEDIN_API_VERSION"))
 
-# Safety cap on pagination loop iterations (pages, not rows) -- guards
-# against an infinite loop from a bug in cursor/offset handling, not a real
-# business limit (both accounts today are two orders of magnitude smaller
-# than this). Hitting it is always worth a loud log.error, never a silent
-# truncation.
+# Safety cap on LinkedIn pagination loop iterations (pages, not rows) --
+# guards against an infinite loop from a bug in cursor/offset handling, not a
+# real business limit (both accounts today are two orders of magnitude
+# smaller than this). Hitting it RAISES (ListingTooLargeError), never a
+# silent truncation: a --refresh treats whatever a fetch returns as the
+# COMPLETE listing and archives every prior campaign missing from it.
 _MAX_PAGINATION_ITERATIONS = 500
+
+# Safety cap on Google campaign ROWS (`ga.search()` paginates internally, so
+# this loop sees rows, not pages). The account keeps REMOVED campaigns in the
+# listing forever (~135 rows in 2026-10, growing a few a month), so this is
+# set far above any plausible size; hitting it raises like the LinkedIn cap
+# (review round 2: it used to be the 500 PAGE cap applied to rows, logged and
+# returned the truncated list as a full listing -- which a weekly refresh
+# would then have archived campaigns from).
+_MAX_GOOGLE_CAMPAIGN_ROWS = 10_000
+
+
+class ListingTooLargeError(RuntimeError):
+    """A campaign listing hit its safety cap -- the rows collected so far are
+    NOT the complete listing and must not be used as one. Not retried by the
+    refresh (a retry would hit the same cap); the platform is carried
+    forward and the refresh exits 4 (degraded)."""
 
 
 # ---------------------------------------------------------------------------
@@ -225,11 +243,11 @@ def fetch_google_campaigns() -> list[dict]:
 
     `ga.search()` is itself a paginating generator (the google-ads client
     library fetches successive result pages under the hood, transparently to
-    this loop) -- the iteration cap below guards this loop the same way the
+    this loop) -- the row cap below guards this loop the same way the
     explicit `while True` in fetch_linkedin_campaigns() is capped: a runaway
-    generator (bad server-side cursor, client library bug) should hit a loud
-    error, not silently iterate forever or hand back a truncated set without
-    any signal."""
+    generator (bad server-side cursor, client library bug) RAISES
+    ListingTooLargeError, never silently iterates forever or hands back a
+    truncated set as if it were the full listing."""
     client, customer_id = collect_kw_perf._client_and_customer_id()
     ga = client.get_service("GoogleAdsService")
     query = """
@@ -239,15 +257,16 @@ def fetch_google_campaigns() -> list[dict]:
     """
     rows = []
     for i, r in enumerate(ga.search(customer_id=customer_id, query=query)):
-        if i >= _MAX_PAGINATION_ITERATIONS:
+        if i >= _MAX_GOOGLE_CAMPAIGN_ROWS:
             log.error(
                 "Google Ads campaign listing exceeded %d row(s) without "
                 "terminating -- aborting to avoid an unbounded fetch. "
-                "Collected %d campaign(s) so far; if this account genuinely "
-                "has more than %d campaigns, raise _MAX_PAGINATION_ITERATIONS "
-                "deliberately rather than silently truncating.",
-                _MAX_PAGINATION_ITERATIONS, len(rows), _MAX_PAGINATION_ITERATIONS)
-            break
+                "Collected %d campaign(s) so far; NOT returning them as the "
+                "listing. If this account genuinely has more than %d "
+                "campaigns, raise _MAX_GOOGLE_CAMPAIGN_ROWS deliberately.",
+                _MAX_GOOGLE_CAMPAIGN_ROWS, len(rows), _MAX_GOOGLE_CAMPAIGN_ROWS)
+            raise ListingTooLargeError(
+                f"Google Ads campaign listing exceeded {_MAX_GOOGLE_CAMPAIGN_ROWS} rows")
         rows.append({
             "platform": "google",
             "campaign_id": str(r.campaign.id),
@@ -448,10 +467,11 @@ def fetch_linkedin_campaigns() -> list[dict]:
                 "LinkedIn campaign pagination exceeded %d page(s) without "
                 "terminating -- aborting to avoid an infinite loop. Collected "
                 "%d campaign(s) so far; this is almost certainly a cursor-"
-                "handling bug rather than a real account this large. Do NOT "
-                "trust this count -- investigate before using it.",
+                "handling bug rather than a real account this large. NOT "
+                "returning them as the listing -- investigate.",
                 _MAX_PAGINATION_ITERATIONS, len(rows))
-            break
+            raise ListingTooLargeError(
+                f"LinkedIn campaign pagination exceeded {_MAX_PAGINATION_ITERATIONS} pages")
 
         if page_token:
             path = (f"/rest/adAccounts/{ad_account_id}/adCampaigns"
@@ -1164,6 +1184,68 @@ def render_refresh_markdown(merged: list[dict], report: dict, snapshot_date: dat
     return "\n".join(lines)
 
 
+# Refresh-mode retry of a failed per-platform fetch (review round 2). A
+# degraded refresh still WRITES a snapshot dated today, so the daily
+# --only-if-stale-days gate then sees a fresh registry and does not retry
+# until next Monday: one transient 5xx/timeout used to cost up to 14 days of
+# staleness on that platform. Retrying here, inside the same run, is what
+# keeps a transient error from degrading the week. Config errors (missing
+# .env / key / package) and a capped listing are not retried -- a retry
+# cannot fix them. Delays: REGISTRY_FETCH_RETRY_DELAYS_S (comma/space list of
+# seconds, default "30,120" -> up to 3 attempts); no retry is STARTED once
+# _FETCH_RETRY_BUDGET_S has passed for that platform, so the retries stay well
+# inside run_daily.sh's REGISTRY_REFRESH_TIMEOUT_S (900s) bound.
+_FETCH_RETRY_DELAYS_DEFAULT = (30.0, 120.0)
+_FETCH_RETRY_BUDGET_S = 300.0
+_NON_RETRYABLE_FETCH_ERRORS = (FileNotFoundError, KeyError, ImportError, ListingTooLargeError)
+_sleep = time.sleep          # module attribute so tests can stub it out
+
+
+def _fetch_retry_delays(raw: str | None) -> tuple[float, ...]:
+    """Parse REGISTRY_FETCH_RETRY_DELAYS_S. Unset/blank -> the default; a
+    malformed or negative value logs a warning and uses the default (never
+    crashes the refresh over a tuning knob)."""
+    v = (raw or "").strip()
+    if not v:
+        return _FETCH_RETRY_DELAYS_DEFAULT
+    try:
+        delays = tuple(float(x) for x in re.split(r"[,\s]+", v) if x)
+    except ValueError:
+        delays = ()
+    if not delays or any(d < 0 or math.isnan(d) for d in delays):
+        log.warning("Ignoring malformed REGISTRY_FETCH_RETRY_DELAYS_S=%r (expected "
+                    "comma-separated seconds, e.g. 30,120) -- using the default %s",
+                    v, ",".join(f"{d:g}" for d in _FETCH_RETRY_DELAYS_DEFAULT))
+        return _FETCH_RETRY_DELAYS_DEFAULT
+    return delays
+
+
+def _fetch_with_retry(label: str, fetch, delays, clock=time.monotonic):
+    """fetch(), retried after each of `delays` seconds on a transient error.
+    Re-raises the last error (the caller's per-platform fail-soft then
+    carries the platform forward); config errors raise immediately."""
+    start = clock()
+    attempts = len(delays) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return fetch()
+        except _NON_RETRYABLE_FETCH_ERRORS:
+            raise
+        except Exception as e:  # retried, then re-raised to the caller
+            if attempt == attempts:
+                raise
+            delay = delays[attempt - 1]
+            if clock() - start + delay > _FETCH_RETRY_BUDGET_S:
+                log.warning("%s campaign pull failed (attempt %d of %d: %s) -- retry "
+                            "budget of %gs exhausted, not retrying", label, attempt,
+                            attempts, e, _FETCH_RETRY_BUDGET_S)
+                raise
+            log.warning("%s campaign pull failed (attempt %d of %d: %s) -- retrying in %gs",
+                        label, attempt, attempts, e, delay)
+            _sleep(delay)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
 def _main_refresh(args, snapshot_date: date) -> int:
     """--refresh path of main(); see the module docstring. Exit codes:
     0 ok (or skipped as fresh), 1 nothing fetched / write failed,
@@ -1198,8 +1280,9 @@ def _main_refresh(args, snapshot_date: date) -> int:
                      prior_max, age, args.only_if_stale_days)
             return 0
 
-    # (iii) Per-platform fetch, each fail-soft: a platform that fails is
-    # simply carried forward unchanged.
+    # (iii) Per-platform fetch, each fail-soft: a platform that still fails
+    # after its retries (_fetch_with_retry) is carried forward unchanged.
+    delays = _fetch_retry_delays(os.environ.get("REGISTRY_FETCH_RETRY_DELAYS_S"))
     live_raw: list[dict] = []
     fetched: set = set()
     if args.from_fixture:
@@ -1213,7 +1296,8 @@ def _main_refresh(args, snapshot_date: date) -> int:
                     ({"linkedin"} if args.from_linkedin else set())
         if args.from_google:
             try:
-                google_rows = fetch_google_campaigns()
+                google_rows = _fetch_with_retry(
+                    "Google Ads", fetch_google_campaigns, delays)
                 log.info("Pulled %d live Google Ads campaign(s)", len(google_rows))
                 live_raw += google_rows
                 fetched.add("google")
@@ -1227,7 +1311,8 @@ def _main_refresh(args, snapshot_date: date) -> int:
                 log.warning("Google Ads campaign pull failed (%s) -- carrying Google forward", e)
         if args.from_linkedin:
             try:
-                linkedin_rows = fetch_linkedin_campaigns()
+                linkedin_rows = _fetch_with_retry(
+                    "LinkedIn Ads", fetch_linkedin_campaigns, delays)
                 log.info("Pulled %d live LinkedIn Ads campaign(s)", len(linkedin_rows))
                 live_raw += linkedin_rows
                 fetched.add("linkedin")

@@ -17,7 +17,10 @@ Design (see ops/README.md for the SLA table and the runbook):
   - SELECT-only. One UNION ALL query of MAX(date) per table; if that fails
     (one 403, one missing table, or a cross-location union) it falls back to
     one query per table, so a single bad table becomes a "NO DATA" line
-    instead of crashing the run. There is no BigQuery write path here.
+    instead of crashing the run. A service-wide failure (5xx, rate limit,
+    retries exhausted) skips that fallback, and the whole read has a hard
+    time budget, so an outage exits 1 instead of hanging past the job
+    timeout. There is no BigQuery write path here.
   - Stateless daily dedup. `late_since` is derived from the data itself
     (latest + max_lag + 1), so the cron firing once a day IS the dedup: the
     alert repeats daily while a table is late and pages (WATCHDOG_MENTION,
@@ -30,11 +33,13 @@ Design (see ops/README.md for the SLA table and the runbook):
     LinkedIn refresh token, the LinkedIn-Version sunset) and warns 30 days
     ahead -- the 2026-10-27 root cause was exactly such a silent deadline.
 
-Exit codes (GitHub's scheduled-workflow failure email is the backstop when
-Slack or BQ credentials themselves break):
+Exit codes (any non-success run opens or updates a GitHub issue assigned to
+the repo owner -- the workflow's alert-on-failure job -- which is the backstop
+when Slack or BQ credentials themselves break):
   0  run succeeded (breaches posted, or nothing to post)
   1  watchdog infrastructure failure: missing env var, BQ auth/query failure
-     for ALL tables, or the Slack post failed
+     for ALL tables, a BigQuery outage (5xx / rate limit / retry exhausted),
+     the read running past FETCH_BUDGET_S, or the Slack post failed
   2  only with --fail-on-breach: at least one alert-severity table breach
      (after the message was posted / printed successfully)
 
@@ -81,7 +86,26 @@ DEFAULT_PROJECT = "ik-marketing-data"
 # scopes" on jobs.insert, which every query needs (verified 2026-10-27).
 # Read-only behavior comes from IAM + this module being SELECT-only.
 CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-QUERY_TIMEOUT_S = 120
+# Hard time budget for the BigQuery read (review-2). google-cloud-bigquery
+# 3.46 by default retries each API call for 600s, wraps jobs.insert in a
+# private 600s insert retry and result() in a 2400s job retry, so a BigQuery
+# outage would outlive the workflow's 10-minute job timeout: the run would end
+# "cancelled" (no failure email) instead of exit 1. Every live query goes
+# through _BoundedClient (30s call retry, job_retry=None -- the only public
+# way to drop both job-level retries), and fetch_latest() stops the per-table
+# fallback once FETCH_BUDGET_S is used up. FETCH_BUDGET_S + QUERY_WORST_CASE_S
+# must stay under the workflow's `timeout 8m` wrapper (the tests pin that, and
+# replay an outage through the real library on a fake clock).
+QUERY_TIMEOUT_S = 60          # result(): wait for one query to finish
+BQ_REQUEST_TIMEOUT_S = 20     # one HTTP request (jobs.insert)
+BQ_RETRY_S = 30               # retries of one API call (insert / get / getQueryResults)
+QUERY_WORST_CASE_S = (BQ_REQUEST_TIMEOUT_S + BQ_RETRY_S             # insert
+                      + QUERY_TIMEOUT_S + BQ_RETRY_S + QUERY_TIMEOUT_S)  # result: wait + last poll
+FETCH_BUDGET_S = 240          # whole read: UNION ALL + per-table fallback
+# BigQuery error reasons that mean "the service", not "this table": the
+# per-table fallback is skipped for these (it would only repeat the outage).
+_SYSTEMIC_REASONS = frozenset({"backendError", "internalError", "jobBackendError",
+                               "jobInternalError", "rateLimitExceeded"})
 
 SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
 MAX_MESSAGE_CHARS = 3900          # same cap as slack-tools/slack_post.py:43
@@ -484,7 +508,37 @@ def build_client():
         info, scopes=[CLOUD_PLATFORM_SCOPE])
     # No `location`: BigQuery infers it from the referenced tables, which
     # keeps the per-table fallback working even if datasets differ in region.
-    return bigquery.Client(project=bq_project(), credentials=creds)
+    return _BoundedClient(bigquery.Client(project=bq_project(), credentials=creds))
+
+
+class _BoundedClient:
+    """The only client fetch_latest() sees on the live path: every query gets
+    the bounded retry/timeout settings above instead of the library defaults.
+    Same .query(sql).result(timeout=) shape as bigquery.Client, so the tests'
+    fakes need no change."""
+
+    def __init__(self, client):
+        from google.cloud.bigquery.retry import DEFAULT_RETRY  # lazy, like build_client
+        self._client = client
+        self._retry = DEFAULT_RETRY.with_timeout(BQ_RETRY_S)
+
+    def query(self, sql):
+        # job_retry=None: no 600s jobs.insert retry and no 2400s re-run of a
+        # failed job. A read that fails today is retried by tomorrow's cron;
+        # a hang would silence the alert.
+        job = self._client.query(sql, retry=self._retry, timeout=BQ_REQUEST_TIMEOUT_S,
+                                 job_retry=None)
+        return _BoundedJob(job, self._retry)
+
+
+class _BoundedJob:
+    def __init__(self, job, retry):
+        self._job, self._retry = job, retry
+
+    def result(self, timeout=QUERY_TIMEOUT_S):
+        # job_retry left at its default: result() resolves that to the
+        # job_retry=None the query() call above stored on the job.
+        return self._job.result(timeout=timeout, retry=self._retry)
 
 
 def _validate_spec(spec: TableSpec) -> None:
@@ -527,13 +581,35 @@ def _err(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {msg}" if msg else type(exc).__name__
 
 
+def _is_systemic(exc: BaseException) -> bool:
+    """True for failures of the BigQuery service rather than of one table:
+    a timeout, retries exhausted (google.api_core RetryError), HTTP 5xx/429,
+    or a backendError/internalError/rateLimitExceeded reason. Matched by
+    name/attribute so the pure path never imports google.api_core."""
+    if isinstance(exc, TimeoutError):             # incl. concurrent.futures.TimeoutError (3.11+)
+        return True
+    if any(cls.__name__ == "RetryError" for cls in type(exc).__mro__):
+        return True
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and (code >= 500 or code == 429):
+        return True
+    errors = getattr(exc, "errors", None)
+    reasons = {e.get("reason") for e in errors if isinstance(e, dict)} if isinstance(errors, list) else set()
+    return bool(reasons & _SYSTEMIC_REASONS)
+
+
 def fetch_latest(client, specs: Iterable[TableSpec] = SPECS,
-                 project: str | None = None) -> dict:
+                 project: str | None = None, *, budget_s: float = FETCH_BUDGET_S,
+                 clock=None) -> dict:
     """{key: date|None} for every spec. One UNION ALL query; on failure, one
     query per table with None for each table that errors. Raises
-    FreshnessQueryError only when EVERY per-table query fails."""
+    FreshnessQueryError when EVERY per-table query fails, when a failure is
+    service-wide (_is_systemic: no per-table fallback, it would only repeat
+    the outage 22 times), or when the read uses up `budget_s` seconds."""
     specs = list(specs)
     project = project or bq_project()
+    clock = clock or time.monotonic
+    deadline = clock() + budget_s
     union_sql = build_union_sql(specs, project)   # unsafe identifier -> ValueError, loudly
     try:
         rows = client.query(union_sql).result(timeout=QUERY_TIMEOUT_S)
@@ -543,16 +619,27 @@ def fetch_latest(client, specs: Iterable[TableSpec] = SPECS,
                 out[row["k"]] = _coerce_date(row["d"])
         return out
     except Exception as exc:                      # noqa: BLE001 -- any BQ failure -> fallback
+        if _is_systemic(exc):
+            raise FreshnessQueryError(
+                f"BigQuery unavailable ({_err(exc)}) -- per-table fallback skipped") from None
         log.warning("UNION ALL freshness query failed (%s) -- falling back to one "
                     "query per table", _err(exc))
 
     out: dict = {}
     failures = 0
-    for spec in specs:
+    for i, spec in enumerate(specs):
+        if clock() >= deadline:
+            raise FreshnessQueryError(
+                f"freshness read used up its {budget_s:.0f}s budget after {i}/{len(specs)} "
+                "per-table queries")
         try:
             rows = list(client.query(_select_sql(spec, project)).result(timeout=QUERY_TIMEOUT_S))
             out[spec.key] = _coerce_date(rows[0]["d"]) if rows else None
         except Exception as exc:                  # noqa: BLE001
+            if _is_systemic(exc):
+                raise FreshnessQueryError(
+                    f"BigQuery unavailable at {spec.key} ({_err(exc)}) -- "
+                    "remaining per-table queries skipped") from None
             failures += 1
             out[spec.key] = None
             log.warning("freshness query failed for %s (%s) -- reporting NO DATA",

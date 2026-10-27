@@ -1256,7 +1256,7 @@ Secrets set (`flyctl secrets ... -a ik-ad-generator`):
 | `GOOGLE_ADS_ENV_B64` | base64 of `/mnt/c/mcp-servers/google-ads/.env` |
 | `SLACK_ENV_B64` | base64 of `/mnt/c/mcp-servers/slack-tools/.env` |
 | `GENERATION_BQ_SERVICE_ACCOUNT_B64` | base64 of `/mnt/c/Users/Admin/.gcp-keys/claude-code-dev-bq.json` |
-| `LINKEDIN_ENV_B64` (optional, 2026-10-27) | base64 of `C:\mcp-servers\linkedin-ads\.env` -- only the weekly registry refresh uses it; unset = Google-only refresh (see below) |
+| `LINKEDIN_ENV_B64` (2026-10-27; not required to start) | base64 of `C:\mcp-servers\linkedin-ads\.env` -- only the weekly registry refresh uses it; unset / staged-only / undecodable = LinkedIn carried forward frozen and flagged as a soft failure on every run (see below) |
 
 `entrypoint.sh` materializes these into `/app/google-ads/.env`,
 `/app/slack-tools/.env`, and `/tmp/generation_bq_service_account.json`
@@ -1395,8 +1395,9 @@ blank every campaign missing from it.
 
 **Degraded = exit 4 (written, but not silent).** When a platform that was
 requested (`--from-google` / `--from-linkedin`, or present in the fixture)
-is carried forward -- its fetch raised (expired refresh token, 426 fallback
-exhausted, 5xx, bad body) or its listing tripped the partial guard -- the
+is carried forward -- its fetch raised (missing creds, expired refresh
+token, 426 fallback exhausted, 5xx, bad body, listing over its safety cap)
+on every attempt, or its listing tripped the partial guard -- the
 complete carry-forward snapshot is still written, but the builder logs
 `REGISTRY_REFRESH DEGRADED` and exits 4. Every carried row gets the new
 `snapshot_date`, so without this the frozen platform would look fresh to
@@ -1408,6 +1409,17 @@ run with `--accept-partial <platform>` (in `run_daily.sh`:
 `REGISTRY_ACCEPT_PARTIAL=<platform>` plus `FORCE_REGISTRY_REFRESH=true`,
 then unset both): the missing campaigns are archived, so the guard stops
 re-firing on them.
+
+**Retries.** A degraded snapshot is still dated today, so the daily
+`--only-if-stale-days` gate would not retry the carried platform until the
+next Monday. A failed platform fetch is therefore retried inside the run
+first: after each delay in `REGISTRY_FETCH_RETRY_DELAYS_S` (default
+`30,120`, so up to 3 attempts), with no retry started once 300s have passed
+for that platform (well inside `REGISTRY_REFRESH_TIMEOUT_S`). Config errors
+(missing `.env` / key / package) and a listing over its safety cap are not
+retried. The listing caps (Google: 10,000 rows; LinkedIn: 500 pages) RAISE
+-- a truncated listing is never returned as a complete one, since the
+refresh would archive every campaign missing from it.
 
 **Backfill mode is for an EMPTY registry only.** Without `--refresh`, a
 live (`DRY_RUN=false`) run refuses to write once `campaign_registry` has
@@ -1441,14 +1453,25 @@ the chain's only fail-soft step.
 | `REGISTRY_STALE_DAYS` | `7` | catch-up threshold for non-Monday runs |
 | `REGISTRY_REFRESH_TIMEOUT_S` | `900` | hard bound on the builder |
 | `REGISTRY_ACCEPT_PARTIAL` | _(empty)_ | `google` / `linkedin` (comma list) -> `--accept-partial`; one run only, see "Degraded" above |
+| `REGISTRY_LINKEDIN_OPTIONAL` | `false` | `true` = missing LinkedIn creds mean a deliberate Google-only refresh (not flagged) |
+| `REGISTRY_FETCH_RETRY_DELAYS_S` | `30,120` | builder: seconds to wait before each retry of a failed platform fetch (see "Retries") |
 | `LINKEDIN_API_VERSION` | `202610` | `LinkedIn-Version` header (YYYYMM). On a 426 the builder probes the current UTC month back 12 months (at most 13 calls), uses the first 2xx and logs `bump LINKEDIN_API_VERSION` |
 
-**LinkedIn is optional.** It is fetched only when
-`${IK_MCP_DIR:-/app}/linkedin-ads/.env` exists, i.e. when the optional
-`LINKEDIN_ENV_B64` Fly secret is set (`entrypoint.sh` decodes it with a
-guard, so a bad value logs a warning instead of killing the container).
-Without it the refresh is Google-only and every LinkedIn row is carried
-forward unchanged. The builder refreshes the access token in memory on a
+**LinkedIn is always requested, and missing creds are never silent.**
+`${IK_MCP_DIR:-/app}/linkedin-ads/.env` comes from the `LINKEDIN_ENV_B64`
+Fly secret (`entrypoint.sh` decodes it with a guard, so a bad value logs a
+warning instead of killing the container). A secret set with `--stage` is
+NOT on the machine until it is applied: `flyctl secrets deploy -a
+ik-ad-generator` while the machine is stopped, or the next `fly deploy`.
+Without the file, `run_daily.sh` still passes `--from-linkedin` (the
+builder carries LinkedIn forward and exits 4 on a refresh day) and records
+`registry_refresh_linkedin(creds-absent)` -- `(creds-undecodable)` when
+`entrypoint.sh` left its `.env.decode-failed` marker -- as a soft failure on
+EVERY run, so the Slack digest flags it daily until fixed: a Google-only
+snapshot still advances `MAX(snapshot_date)`, which would otherwise make a
+frozen LinkedIn look fresh. `REGISTRY_LINKEDIN_OPTIONAL=true` makes a
+Google-only refresh deliberate (no `--from-linkedin`, no flag). The builder
+refreshes the access token in memory on a
 401, so only the refresh token needs to stay valid (probed 2026-10-27: about
 148 days left, i.e. until about 2027-03-24 -- `ops/freshness_watchdog.py`
 tracks it); when it lapses, the LinkedIn fetch fails, LinkedIn is carried
@@ -1466,8 +1489,8 @@ Tests: `tests_registry.py` (merge cases r1-r10, CLI cases c1-c10, the
 LinkedIn-Version fallback with mocked HTTP, the latest-snapshot query) and
 `tests_run_daily.py` (runs the real `run_daily.sh` against a stub `python`:
 fail-soft ordering, the `--from-linkedin` / `--only-if-stale-days` flags,
-the timeout bound, plus `entrypoint.sh`'s optional `LINKEDIN_ENV_B64`
-handling).
+the missing-LinkedIn-creds soft failure, the timeout bound, plus
+`entrypoint.sh`'s `LINKEDIN_ENV_B64` handling and decode-failed marker).
 
 ## Step 15: value-ledger + acceptance-rate instrumentation (`instrument.py`)
 

@@ -49,6 +49,15 @@ fixtures/registry_prior_snapshot.json + registry_refresh_live_raw.json:
       (exit 1), prior unreadable live (exit 2), backfill flags unchanged,
       partial-listing guard (exit 4) + --accept-partial (archives, exit 0,
       no re-trip next week), arg validation.
+  (c4c-c4e) a failed platform fetch is RETRIED (REGISTRY_FETCH_RETRY_DELAYS_S,
+      default 30,120) before it is carried forward -- a transient error that
+      clears on retry is a clean exit 0; missing creds are not retried and,
+      with --from-linkedin always passed by run_daily.sh, exit 4.
+  (t1-t6) _fetch_with_retry / _fetch_retry_delays: non-retryable errors,
+      the retry budget, env parsing; the Google (10,000 rows) and LinkedIn
+      (500 pages) listing caps RAISE ListingTooLargeError instead of
+      returning a truncated listing as complete, and a refresh then carries
+      that platform forward with exit 4.
   (c10) a LIVE backfill (no --refresh) refuses an existing registry (exit 3,
       before any API call), fails closed when it can't check (exit 2), still
       seeds an empty one, and --force-backfill overrides -- fake BQ client.
@@ -417,6 +426,7 @@ def main():
 
     test_merge_refresh()
     test_refresh_cli()
+    test_fetch_retry_and_caps()
     test_linkedin_version_fallback()
     test_bq_query_shapes()
 
@@ -569,6 +579,9 @@ def test_refresh_cli():
 
     cap = _LogCapture()
     bcr.log.addHandler(cap)
+    sleeps = []
+    orig_sleep = bcr._sleep
+    bcr._sleep = sleeps.append        # retries never really wait in tests
     try:
         # (c1) full refresh run from fixtures
         _clean()
@@ -663,14 +676,20 @@ def test_refresh_cli():
         orig_fl = bcr.fetch_linkedin_campaigns
         bcr.fetch_google_campaigns = lambda: [
             r for r in bcr.load_fixture(LIVE_FIXTURE) if r["platform"] == "google"]
-        bcr.fetch_linkedin_campaigns = lambda: (_ for _ in ()).throw(
+        li_calls = []
+        bcr.fetch_linkedin_campaigns = lambda: li_calls.append(1) or (_ for _ in ()).throw(
             RuntimeError("LinkedIn API error (426): version not active"))
         try:
             _clean()
             cap.records.clear()
+            sleeps.clear()
             rc = bcr.main(["--refresh", "--from-google", "--from-linkedin", "--prior-fixture",
                            PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
                            "--out-md", str(md_path)])
+            check(len(li_calls) == 3 and sleeps == [30.0, 120.0]
+                  and cap.has("LinkedIn Ads campaign pull failed (attempt 1 of 3"),
+                  f"(c4) a failing LinkedIn fetch is retried after 30s and 120s before it is "
+                  f"carried forward (calls={len(li_calls)}, sleeps={sleeps})")
             rows = json.loads(preview_path.read_text(encoding="utf-8"))["rows"]
             li = _by_id([r for r in rows if r["platform"] == "linkedin"])
             check(rc == 4 and sorted(li) == [("linkedin", "7001"), ("linkedin", "7002"),
@@ -688,7 +707,8 @@ def test_refresh_cli():
                   f"(c4) the summary marks linkedin:failed and a DEGRADED error is logged "
                   f"(got {summary})")
 
-            # (c4b) LinkedIn NOT requested (creds absent in run_daily.sh) -> carried, exit 0
+            # (c4b) LinkedIn NOT requested (only with run_daily.sh's explicit
+            #       REGISTRY_LINKEDIN_OPTIONAL=true opt-out) -> carried, exit 0
             _clean()
             cap.records.clear()
             rc = bcr.main(["--refresh", "--from-google", "--prior-fixture", PRIOR_FIXTURE,
@@ -699,6 +719,66 @@ def test_refresh_cli():
                   and not cap.has("DEGRADED"),
                   f"(c4b) an unrequested platform carried forward is not degraded -> exit 0 "
                   f"(rc={rc}, {summary})")
+
+            # (c4c) a TRANSIENT LinkedIn failure that clears on the retry -> fetched,
+            #       exit 0 (a degraded snapshot would stop the daily gate retrying
+            #       until next Monday)
+            flaky = []
+
+            def _flaky_linkedin():
+                flaky.append(1)
+                if len(flaky) == 1:
+                    raise RuntimeError("LinkedIn API error (503): upstream timeout")
+                return [r for r in bcr.load_fixture(LIVE_FIXTURE) if r["platform"] == "linkedin"]
+
+            bcr.fetch_linkedin_campaigns = _flaky_linkedin
+            _clean()
+            cap.records.clear()
+            sleeps.clear()
+            rc = bcr.main(["--refresh", "--from-google", "--from-linkedin", "--prior-fixture",
+                           PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
+                           "--out-md", str(md_path)])
+            summary = [r for r in cap.records if r.startswith("REGISTRY_REFRESH snapshot=")]
+            check(rc == 0 and len(flaky) == 2 and sleeps == [30.0]
+                  and summary and summary[0].endswith("sources=google:fetched,linkedin:fetched")
+                  and not cap.has("DEGRADED"),
+                  f"(c4c) one transient LinkedIn 503 then success -> fetched on the retry, "
+                  f"exit 0, not degraded (rc={rc}, calls={len(flaky)}, sleeps={sleeps})")
+
+            # (c4d) REGISTRY_FETCH_RETRY_DELAYS_S tunes the waits
+            flaky.clear()
+            sleeps.clear()
+            os.environ["REGISTRY_FETCH_RETRY_DELAYS_S"] = "0"
+            try:
+                rc = bcr.main(["--refresh", "--from-google", "--from-linkedin", "--prior-fixture",
+                               PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
+                               "--out-md", str(md_path)])
+            finally:
+                os.environ.pop("REGISTRY_FETCH_RETRY_DELAYS_S", None)
+            check(rc == 0 and len(flaky) == 2 and sleeps == [0.0],
+                  f"(c4d) REGISTRY_FETCH_RETRY_DELAYS_S=0 -> one immediate retry "
+                  f"(rc={rc}, sleeps={sleeps})")
+
+            # (c4e) LinkedIn creds absent but --from-linkedin passed (run_daily.sh's
+            #       default now) -> NOT retried, carried forward, exit 4 = flagged
+            li_calls.clear()
+            bcr.fetch_linkedin_campaigns = lambda: li_calls.append(1) or (_ for _ in ()).throw(
+                FileNotFoundError("Env file not found: /app/linkedin-ads/.env"))
+            _clean()
+            cap.records.clear()
+            sleeps.clear()
+            rc = bcr.main(["--refresh", "--from-google", "--from-linkedin", "--prior-fixture",
+                           PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
+                           "--out-md", str(md_path)])
+            summary = [r for r in cap.records if r.startswith("REGISTRY_REFRESH snapshot=")]
+            check(rc == 4 and len(li_calls) == 1 and sleeps == [] and preview_path.exists()
+                  and summary and summary[0].endswith("sources=google:fetched,linkedin:failed")
+                  and cap.has("LinkedIn Ads credentials not found"),
+                  f"(c4e) missing LinkedIn creds with --from-linkedin -> no retry, LinkedIn "
+                  f"carried forward, snapshot written, exit 4 (rc={rc}, calls={len(li_calls)}, "
+                  f"sleeps={sleeps}, {summary})")
+            bcr.fetch_linkedin_campaigns = lambda: (_ for _ in ()).throw(
+                RuntimeError("LinkedIn API error (426): version not active"))
 
             # (c5) both platforms fail -> exit 1, nothing written
             bcr.fetch_google_campaigns = lambda: (_ for _ in ()).throw(
@@ -818,9 +898,176 @@ def test_refresh_cli():
         #       backfill over the existing registry would hide the other platform
         test_live_backfill_guard(md_path)
     finally:
+        bcr._sleep = orig_sleep
         bcr.log.removeHandler(cap)
         if md_path.exists():
             md_path.unlink()
+
+
+class _FakeGoogleRow:
+    def __init__(self, i):
+        class _N:
+            def __init__(self, name):
+                self.name = name
+
+        class _C:
+            pass
+
+        self.campaign = _C()
+        self.campaign.id = 50000 + i
+        self.campaign.name = f"IK-IN_Search_Test_{i}"
+        self.campaign.status = _N("ENABLED")
+        self.campaign.advertising_channel_type = _N("SEARCH")
+
+
+class _FakeGoogleClient:
+    def __init__(self, n_rows):
+        self.n_rows = n_rows
+
+    def get_service(self, _name):
+        n = self.n_rows
+
+        class _Svc:
+            def search(self, customer_id, query):
+                return (_FakeGoogleRow(i) for i in range(n))
+        return _Svc()
+
+
+def test_fetch_retry_and_caps():
+    """(t1-t6) the per-platform retry helper and the listing safety caps --
+    no network, no sleeping (fake clock / recorded sleeps)."""
+    bcr = build_campaign_registry
+    import collect_kw_perf
+    sleeps = []
+    orig_sleep = bcr._sleep
+    bcr._sleep = sleeps.append
+    cap = _LogCapture()
+    bcr.log.addHandler(cap)
+    orig_client = collect_kw_perf._client_and_customer_id
+    orig_cap = bcr._MAX_GOOGLE_CAMPAIGN_ROWS
+    orig_fg, orig_fl = bcr.fetch_google_campaigns, bcr.fetch_linkedin_campaigns
+    try:
+        # (t1) non-retryable errors raise on the first attempt
+        for exc in (FileNotFoundError("x"), KeyError("LINKEDIN_ACCESS_TOKEN"),
+                    ImportError("google.ads"), bcr.ListingTooLargeError("cap")):
+            calls, sleeps[:] = [], []
+
+            def _f(exc=exc, calls=calls):
+                calls.append(1)
+                raise exc
+            try:
+                bcr._fetch_with_retry("X", _f, (30.0, 120.0))
+                raised = None
+            except Exception as e:  # noqa: BLE001 -- asserting which type propagates
+                raised = e
+            check(raised is exc and calls == [1] and sleeps == [],
+                  f"(t1) {type(exc).__name__} is not retried (calls={len(calls)})")
+
+        # (t2) the retry budget: no retry is STARTED once it would overrun
+        now = [0.0]
+
+        def _slow_fail():
+            now[0] += 250.0            # each attempt burns 250s of the budget
+            raise RuntimeError("timeout")
+        sleeps.clear()
+        try:
+            bcr._fetch_with_retry("LinkedIn Ads", _slow_fail, (30.0, 120.0), clock=lambda: now[0])
+            raised = None
+        except RuntimeError as e:
+            raised = e
+        check(raised is not None and sleeps == [30.0] and now[0] == 500.0
+              and cap.has("retry budget of 300s exhausted"),
+              f"(t2) a 250s-per-attempt failure retries once (250+30 <= 300) and then stops "
+              f"(250+30+250+120 > 300) instead of running past the timeout bound "
+              f"(sleeps={sleeps}, elapsed={now[0]})")
+
+        # (t3) REGISTRY_FETCH_RETRY_DELAYS_S parsing
+        cases = {None: (30.0, 120.0), "": (30.0, 120.0), "5, 10 15": (5.0, 10.0, 15.0),
+                 "0": (0.0,), "abc": (30.0, 120.0), "-1,5": (30.0, 120.0),
+                 "nan": (30.0, 120.0)}
+        for raw, want in cases.items():
+            got = bcr._fetch_retry_delays(raw)
+            check(got == want, f"(t3) REGISTRY_FETCH_RETRY_DELAYS_S={raw!r} -> {want} (got {got})")
+
+        # (t4) Google listing cap RAISES; a listing exactly at the cap is returned whole
+        bcr._MAX_GOOGLE_CAMPAIGN_ROWS = 3
+        collect_kw_perf._client_and_customer_id = lambda: (_FakeGoogleClient(3), "123")
+        rows = bcr.fetch_google_campaigns()
+        check(len(rows) == 3 and rows[0]["campaign_id"] == "50000"
+              and rows[0]["status"] == "ENABLED",
+              f"(t4) a Google listing of exactly the cap comes back whole ({len(rows)} rows)")
+        collect_kw_perf._client_and_customer_id = lambda: (_FakeGoogleClient(4), "123")
+        try:
+            bcr.fetch_google_campaigns()
+            raised = None
+        except bcr.ListingTooLargeError as e:
+            raised = e
+        check(raised is not None,
+              "(t4) a Google listing over the cap raises ListingTooLargeError, never a "
+              "truncated list returned as the full listing")
+        check(orig_cap == 10_000 and orig_cap > bcr._MAX_PAGINATION_ITERATIONS,
+              f"(t4) the production Google cap is row-based and far above the account "
+              f"size (got {orig_cap})")
+
+        # (t5) refresh over a capped Google listing -> Google carried forward, exit 4
+        bcr.fetch_linkedin_campaigns = lambda: [
+            r for r in bcr.load_fixture(LIVE_FIXTURE) if r["platform"] == "linkedin"]
+        cap.records.clear()
+        sleeps.clear()
+        md_path = config.STAGING_DIR / "test_campaign_registry_caps.md"
+        rc = bcr.main(["--refresh", "--from-google", "--from-linkedin", "--prior-fixture",
+                       PRIOR_FIXTURE, "--snapshot-date", str(REFRESH_DATE),
+                       "--out-md", str(md_path)])
+        summary = [r for r in cap.records if r.startswith("REGISTRY_REFRESH snapshot=")]
+        preview = json.loads((config.STAGING_DIR / "bq_preview_campaign_registry.json")
+                             .read_text(encoding="utf-8"))
+        prior_google = {(r["platform_campaign_id"], r["status"])
+                        for r in bcr.load_fixture(PRIOR_FIXTURE) if r["platform"] == "google"}
+        new_google = {(r["platform_campaign_id"], r["status"])
+                      for r in preview["rows"] if r["platform"] == "google"}
+        check(rc == 4 and sleeps == [] and summary
+              and summary[0].endswith("sources=google:failed,linkedin:fetched")
+              and new_google == prior_google,
+              f"(t5) a refresh whose Google listing hits the cap carries Google forward "
+              f"(nothing archived from a truncated list), no retry, exit 4 (rc={rc}, "
+              f"{summary})")
+        if md_path.exists():
+            md_path.unlink()
+
+        # (t6) LinkedIn page cap RAISES too (runaway cursor)
+        class _Loop:
+            def __init__(self):
+                self.n = 0
+        loop = _Loop()
+
+        def _always_next(access_token, path, version):
+            loop.n += 1
+            return 200, {"elements": [{"id": loop.n, "name": f"c{loop.n}", "status": "ACTIVE"}],
+                         "metadata": {"nextPageToken": f"t{loop.n}"}}
+        orig_get, orig_env = bcr._linkedin_get, collect_kw_perf.load_env
+        orig_pages = bcr._MAX_PAGINATION_ITERATIONS
+        bcr.fetch_linkedin_campaigns = orig_fl
+        bcr._linkedin_get = _always_next
+        collect_kw_perf.load_env = lambda path: {"LINKEDIN_ACCESS_TOKEN": "dummy",
+                                                 "LINKEDIN_AD_ACCOUNT_ID": "1"}
+        bcr._MAX_PAGINATION_ITERATIONS = 5
+        try:
+            bcr.fetch_linkedin_campaigns()
+            raised = None
+        except bcr.ListingTooLargeError as e:
+            raised = e
+        finally:
+            bcr._linkedin_get, collect_kw_perf.load_env = orig_get, orig_env
+            bcr._MAX_PAGINATION_ITERATIONS = orig_pages
+        check(raised is not None and loop.n == 5,
+              f"(t6) a LinkedIn cursor that never ends raises ListingTooLargeError after "
+              f"the page cap ({loop.n} pages) instead of returning a partial listing")
+    finally:
+        bcr._sleep = orig_sleep
+        bcr.log.removeHandler(cap)
+        collect_kw_perf._client_and_customer_id = orig_client
+        bcr._MAX_GOOGLE_CAMPAIGN_ROWS = orig_cap
+        bcr.fetch_google_campaigns, bcr.fetch_linkedin_campaigns = orig_fg, orig_fl
 
 
 def test_live_backfill_guard(md_path):

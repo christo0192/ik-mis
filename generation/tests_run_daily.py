@@ -24,7 +24,14 @@ Asserts:
        run, after it; the soft failure is reported at the end.
   (d2) step order: collect_kw_perf -> lead_quality -> registry_refresh ->
        generate_assets.
-  (d3) --from-linkedin only when ${IK_MCP_DIR}/linkedin-ads/.env exists.
+  (d3) --from-linkedin is ALWAYS passed; without ${IK_MCP_DIR}/linkedin-ads/.env
+       every run (refresh day or not) records the soft failure
+       registry_refresh_linkedin(creds-absent) -- (creds-undecodable) with
+       entrypoint.sh's .env.decode-failed marker -- in the final line and
+       the Slack digest; REGISTRY_LINKEDIN_OPTIONAL=true makes Google-only
+       deliberate (no --from-linkedin, no flag). Review round 2: this path
+       used to be a silent Google-only refresh that still advanced
+       MAX(snapshot_date) over a frozen LinkedIn.
   (d4) --only-if-stale-days $REGISTRY_STALE_DAYS (default 7) on non-Monday
        runs; absent on Monday IST and with FORCE_REGISTRY_REFRESH=true.
   (d5) REGISTRY_REFRESH_ENABLED=false never invokes the builder.
@@ -36,10 +43,11 @@ Asserts:
        platform carried forward) is a recorded soft failure -- final line
        and notify_slack --soft-failure; a clean run passes none.
   (d9) REGISTRY_ACCEPT_PARTIAL -> --accept-partial per listed platform.
-  (e1-e4) entrypoint.sh: LINKEDIN_ENV_B64 unset -> Google-only log, no file;
+  (e1-e4) entrypoint.sh: LINKEDIN_ENV_B64 unset -> WARN, no file, no marker;
        valid -> file materialized byte-exact and never echoed; undecodable
-       -> WARN, no file, container continues; a missing REQUIRED secret
-       still exits 2.
+       -> WARN, no file, .env.decode-failed marker, container continues
+       (and a later valid start clears a stale marker); a missing REQUIRED
+       secret still exits 2.
 """
 import base64
 import os
@@ -83,7 +91,8 @@ exit 127
 
 STUB_RUN_DAILY = """#!/bin/bash
 if [ -f "$IK_MCP_DIR/linkedin-ads/.env" ]; then li=yes; else li=no; fi
-echo "STUB_RUN_DAILY linkedin_env=$li"
+if [ -f "$IK_MCP_DIR/linkedin-ads/.env.decode-failed" ]; then mk=yes; else mk=no; fi
+echo "STUB_RUN_DAILY linkedin_env=$li decode_failed_marker=$mk"
 exit 0
 """
 
@@ -125,13 +134,18 @@ class Sandbox:
         self.mcp.mkdir()
         self.log = root / "stub.log"
 
-    def linkedin_env(self, present: bool):
+    def linkedin_env(self, present: bool, decode_failed_marker: bool = False):
         p = self.mcp / "linkedin-ads" / ".env"
+        marker = self.mcp / "linkedin-ads" / ".env.decode-failed"
+        p.parent.mkdir(exist_ok=True)
         if present:
-            p.parent.mkdir(exist_ok=True)
             p.write_text("LINKEDIN_ACCESS_TOKEN=dummy\n", encoding="utf-8")
         elif p.exists():
             p.unlink()
+        if decode_failed_marker:
+            marker.write_text("", encoding="utf-8")
+        elif marker.exists():
+            marker.unlink()
 
     def run_daily(self, **env_over) -> tuple[int, str, list[str], float]:
         if self.log.exists():
@@ -198,11 +212,52 @@ def test_run_daily(sb: Sandbox):
           f"(d1) the soft failure is passed to the Slack digest "
           f"(notify args: {_notify_args(calls)!r})")
     args = _builder_args(calls)
-    check("--refresh --from-google" in args and "--from-linkedin" not in args,
-          f"(d3) no linkedin-ads/.env -> Google-only refresh (args: {args!r})")
-    check("LinkedIn creds absent" in out, "(d3) the Google-only fallback is logged")
+    check("--refresh --from-google --from-linkedin" in args,
+          f"(d3) no linkedin-ads/.env -> LinkedIn is STILL requested, so the builder "
+          f"carries it forward as degraded (exit 4), never a silent Google-only "
+          f"refresh (args: {args!r})")
+    check("LinkedIn creds absent" in out
+          and "--soft-failure registry_refresh_linkedin(creds-absent)" in _notify_args(calls)
+          and any("COMPLETE" in ln and "registry_refresh_linkedin(creds-absent)" in ln
+                  for ln in out.splitlines()),
+          f"(d3) missing LinkedIn creds -> logged, and a registry_refresh_linkedin("
+          f"creds-absent) soft failure in the final line and the Slack digest "
+          f"(notify args: {_notify_args(calls)!r})")
     check("--only-if-stale-days 7" in args,
           f"(d4) non-Monday run passes --only-if-stale-days 7 (args: {args!r})")
+
+    # (d3) flagged on EVERY run, not only refresh days: a builder that skips
+    #      as fresh (exit 0) still leaves LinkedIn frozen -> still flagged
+    rc, out, calls, _ = sb.run_daily(STUB_FAIL_MATCH="")
+    check(rc == 0 and "[registry_refresh] OK" in out
+          and "COMPLETE -- all steps ok" not in out
+          and "fail-soft step(s) FAILED: registry_refresh_linkedin(creds-absent)" in out
+          and _notify_args(calls).count("--soft-failure") == 1
+          and "--soft-failure registry_refresh_linkedin(creds-absent)" in _notify_args(calls),
+          f"(d3) creds absent + builder exit 0 (e.g. skipped as fresh) -> still exactly one "
+          f"soft failure, registry_refresh_linkedin(creds-absent) (rc={rc}, "
+          f"notify={_notify_args(calls)!r})")
+
+    # (d3) entrypoint.sh's decode-failed marker -> (creds-undecodable)
+    sb.linkedin_env(False, decode_failed_marker=True)
+    rc, out, calls, _ = sb.run_daily(STUB_FAIL_MATCH="")
+    check(rc == 0 and "--from-linkedin" in _builder_args(calls)
+          and "--soft-failure registry_refresh_linkedin(creds-undecodable)" in _notify_args(calls)
+          and "creds-absent" not in _notify_args(calls)
+          and "failed to decode" in out,
+          f"(d3) .env.decode-failed marker -> registry_refresh_linkedin(creds-undecodable) "
+          f"(notify={_notify_args(calls)!r})")
+
+    # (d3) REGISTRY_LINKEDIN_OPTIONAL=true -> deliberate Google-only, not flagged
+    sb.linkedin_env(False)
+    rc, out, calls, _ = sb.run_daily(STUB_FAIL_MATCH="", REGISTRY_LINKEDIN_OPTIONAL="true")
+    args = _builder_args(calls)
+    check(rc == 0 and "--refresh --from-google" in args and "--from-linkedin" not in args
+          and "--soft-failure" not in _notify_args(calls)
+          and "COMPLETE -- all steps ok" in out
+          and "deliberate Google-only refresh" in out,
+          f"(d3) REGISTRY_LINKEDIN_OPTIONAL=true + creds absent -> Google-only, no soft "
+          f"failure (args: {args!r}, notify={_notify_args(calls)!r})")
 
     # (d3 present) + builder succeeding
     sb.linkedin_env(True)
@@ -252,8 +307,10 @@ def test_run_daily(sb: Sandbox):
     rc, out, calls, _ = sb.run_daily(REGISTRY_REFRESH_ENABLED="false")
     check(rc == 0 and _index(calls, "build_campaign_registry.py") == -1
           and _index(calls, "generate_assets.py") >= 0
-          and "[registry_refresh] SKIPPED" in out,
-          "(d5) REGISTRY_REFRESH_ENABLED=false skips the builder entirely")
+          and "[registry_refresh] SKIPPED" in out
+          and "--soft-failure" not in _notify_args(calls),
+          "(d5) REGISTRY_REFRESH_ENABLED=false skips the builder entirely (and its "
+          "LinkedIn-creds check)")
 
     # (d6) a hung builder is killed by the timeout bound, still fail-soft
     rc, out, calls, elapsed = sb.run_daily(
@@ -316,12 +373,14 @@ def test_entrypoint(root: Path):
         return p.returncode, p.stdout + p.stderr
 
     rc, out = run()
-    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=no" in out
-          and "LINKEDIN_ENV_B64 not set -- registry refresh will be Google-only" in out,
-          f"(e1) LINKEDIN_ENV_B64 unset -> optional, Google-only log, no file (rc={rc})\n{out}")
+    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=no decode_failed_marker=no" in out
+          and "WARN: LINKEDIN_ENV_B64 not set" in out
+          and "registry_refresh_linkedin(creds-absent)" in out,
+          f"(e1) LINKEDIN_ENV_B64 unset -> not fatal, WARN naming the soft failure, no file, "
+          f"no marker (rc={rc})\n{out}")
 
     rc, out = run(LINKEDIN_ENV_B64=li_b64)
-    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=yes"
+    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=yes decode_failed_marker=no"
           in out and li_env.read_text(encoding="utf-8") == li_plain,
           f"(e2) valid LINKEDIN_ENV_B64 -> linkedin-ads/.env materialized byte-exact (rc={rc})")
     check("li-secret-value-123" not in out and li_b64 not in out
@@ -333,11 +392,16 @@ def test_entrypoint(root: Path):
 
     bad = "%%%not-base64%%%"
     rc, out = run(LINKEDIN_ENV_B64=bad)
-    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=no" in out
+    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=no decode_failed_marker=yes" in out
           and "WARN: LINKEDIN_ENV_B64 failed to decode" in out and not li_env.exists()
           and bad not in out,
-          f"(e3) undecodable LINKEDIN_ENV_B64 -> WARN, no file, container still "
-          f"hands off to run_daily.sh (rc={rc})\n{out}")
+          f"(e3) undecodable LINKEDIN_ENV_B64 -> WARN, no file, .env.decode-failed marker "
+          f"for run_daily.sh, container still hands off to run_daily.sh (rc={rc})\n{out}")
+
+    rc, out = run(LINKEDIN_ENV_B64=li_b64)
+    check(rc == 0 and "STUB_RUN_DAILY linkedin_env=yes decode_failed_marker=no" in out,
+          f"(e3) a later start with a valid secret clears the stale decode-failed marker "
+          f"(rc={rc})\n{out}")
 
     rc, out = run(SLACK_ENV_B64=None)
     check(rc == 2 and "FATAL: required Fly secret 'SLACK_ENV_B64'" in out

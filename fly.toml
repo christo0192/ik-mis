@@ -23,9 +23,11 @@
 # (REGISTRY_REFRESH_ENABLED / FORCE_REGISTRY_REFRESH / REGISTRY_STALE_DAYS /
 # REGISTRY_REFRESH_TIMEOUT_S / REGISTRY_ACCEPT_PARTIAL) default inside
 # run_daily.sh and are NOT set here -- REGISTRY_ACCEPT_PARTIAL in particular
-# is a one-run override, never a standing setting; LinkedIn is included only
-# when the optional LINKEDIN_ENV_B64 secret is set (see
-# fly-deploy/entrypoint.sh).
+# is a one-run override, never a standing setting. LinkedIn needs the
+# LINKEDIN_ENV_B64 secret APPLIED (a `--stage`d one only reaches the machine
+# after `flyctl secrets deploy` or the next deploy); without it every run's
+# Slack digest flags registry_refresh_linkedin(creds-absent) (see
+# fly-deploy/entrypoint.sh) unless REGISTRY_LINKEDIN_OPTIONAL=true.
 
 app = 'ik-ad-generator'
 primary_region = 'sin'   # same region choice as ik-anomaly/ik-claude-spike (bom had no capacity 2026-06-05)

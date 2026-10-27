@@ -156,8 +156,11 @@ test asserts that the snapshot covers exactly the SPECS keys.
 
 The tests also pin `freshness-watchdog.yml` with text-level drift guards: the
 cron (`30 10 * * *`), Python 3.12, `permissions: contents: read`, secrets via
-`env:` only, and no unit-test step before the live run. If you change the
-schedule or the Python version, update the "workflow drift guards" block too.
+`env:` only, no unit-test step before the live run, the `timeout 8m` wrapper
+(shorter than the job's `timeout-minutes`, longer than the script's BigQuery
+budget), the `alert-on-failure` issue job, and the 45-day keepalive gate. If
+you change the schedule or the Python version, update the "workflow drift
+guards" block too.
 A red test only fails CI. It never stops the scheduled watchdog.
 
 ## Exit codes
@@ -165,12 +168,28 @@ A red test only fails CI. It never stops the scheduled watchdog.
 | Code | Meaning |
 |---|---|
 | 0 | Run succeeded: breaches posted, or nothing to post |
-| 1 | Watchdog infrastructure failure: a missing env var, a BigQuery auth/query failure for **all** tables, or a failed Slack post. GitHub emails the run failure to whoever last edited the cron line, which is the backstop channel when Slack or BigQuery credentials themselves break |
+| 1 | Watchdog infrastructure failure: a missing env var, a BigQuery auth/query failure for **all** tables, a BigQuery outage (5xx, rate limit, retries exhausted), the read running past its 240s budget, or a failed Slack post |
 | 2 | Only with `--fail-on-breach`: an alert-severity table is late (after posting). The workflow does not use this flag by default |
+| 124 | The `timeout 8m` wrapper killed a run that hung anyway. It counts as a job failure |
+
+**Backstop when Slack or BigQuery credentials break.** Any run where the
+`watchdog` or `keepalive` job does not succeed (exit 1, exit 124, or a
+job-timeout cancel) makes the `alert-on-failure` job open a GitHub issue titled
+`freshness-watchdog is failing`, assigned to and @-mentioning the repo owner.
+While that issue stays open, later failures add a comment to it. Close it once
+the cause is fixed. This does not rely on GitHub's "run failed" email, for two
+reasons. That email goes to whoever GitHub treats as the workflow's actor,
+which can become `github-actions[bot]` after a keepalive re-enable. And a job
+that hits `timeout-minutes` ends as cancelled, which sends no failure email.
 
 The BigQuery read is one `UNION ALL` query. If it fails, the watchdog falls
 back to one query per table, so a single 403 or missing table becomes a NO
-DATA line, not a crash.
+DATA line, not a crash. A service-wide failure (timeout, HTTP 5xx/429,
+`backendError`/`internalError`/`rateLimitExceeded`, retries exhausted) skips
+that fallback and exits 1, because 22 more queries would only repeat the
+outage. Each query has bounded retries (30s per API call, no job-level retry;
+the library defaults are 600s and 2400s). The fallback also stops once the
+whole read has used 240s (`FETCH_BUDGET_S`).
 
 ## Running locally
 
@@ -214,7 +233,8 @@ gh workflow run freshness-watchdog.yml -R christo0192/ik-mis -f dry_run=false -f
   `bigquery.jobUser` on the project, then rotate the secret to it.
 - **Bot.** The Slack bot (`lead_context_builder`) has `chat:write` only. If it
   is removed from private #ib-perf, posts fail with `not_in_channel`, and the
-  run exits 1 so the GitHub failure email fires.
+  run exits 1, which opens or updates the `freshness-watchdog is failing`
+  issue (see "Exit codes").
 - **First run.** The first live run is expected to report today's true
   positives until the M001 fixes land: segment_facts, the 5 Market_Research
   tables, and the registry.
@@ -222,8 +242,16 @@ gh workflow run freshness-watchdog.yml -R christo0192/ik-mis -f dry_run=false -f
   alarm. "Today" is the IST date, and IST equals the UTC date until 18:30 UTC.
 - **Public-repo keepalive.** ik-mis is public as of 2026-10-27. GitHub
   disables scheduled workflows in public repos after 60 days with no
-  repository activity. The workflow's `keepalive` job re-enables itself
-  through the REST API on every run, which resets that timer. If the repo
-  goes private again, the job is harmless and can stay. Private repos need
-  working Actions billing, though: an Actions billing lock stops this
-  watchdog completely.
+  repository activity. Once the last commit on the default branch is 45+
+  days old, the workflow's `keepalive` job re-enables the workflow through
+  the REST API, which resets that timer (if it can't read the commit date, it
+  re-enables anyway). It does not do this on every run, because GitHub sends
+  scheduled-run notifications to whoever last re-enabled the workflow, and
+  here that would be `github-actions[bot]`. A failing keepalive also opens the
+  failure issue. If the repo goes private again, the job is harmless and can
+  stay. Private repos need working Actions billing, though: an Actions
+  billing lock stops this watchdog completely.
+- **Check the backstop once.** The first time the failure issue opens,
+  confirm that its notification actually reached you (email or GitHub
+  inbox). `gh run list -R christo0192/ik-mis -w freshness-watchdog.yml --json
+  event,triggeringActor` shows who GitHub treats as each run's actor.

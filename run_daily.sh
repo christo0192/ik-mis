@@ -9,20 +9,28 @@
 #
 # registry_refresh (added 2026-10-27; the campaign registry had been frozen
 # at its one-shot 2026-07-04 backfill): build_campaign_registry.py --refresh
-# re-lists the live Google (+ LinkedIn, when /app/linkedin-ads/.env exists)
-# campaigns and writes a complete carry-forward snapshot. Runs on Mondays
-# IST, on ANY day the latest snapshot is >= REGISTRY_STALE_DAYS old
-# (catch-up: the first run after deploy, or after a missed Monday, refreshes
-# immediately), or always with FORCE_REGISTRY_REFRESH=true. It sits BEFORE
-# generate_assets so new/renamed campaigns are visible to targeting and
-# keyword routing the same day. It is the ONE fail-soft step: a failure is
-# logged and the chain continues on last week's registry (still a valid,
-# complete snapshot), because a registry hiccup must never cost a day of
-# generation. Every other step stays fail-fast, as below. Fail-soft is never
-# SILENT: the builder exits 4 when it wrote a snapshot but had to carry a
-# requested platform forward (fetch failed, or its listing looked partial),
-# and every non-zero exit lands in SOFT_FAILURES -> the final COMPLETE line
-# AND the Slack digest (notify_slack.py --soft-failure).
+# re-lists the live Google + LinkedIn campaigns and writes a complete
+# carry-forward snapshot. Runs on Mondays IST, on ANY day the latest
+# snapshot is >= REGISTRY_STALE_DAYS old (catch-up: the first run after
+# deploy, or after a missed Monday, refreshes immediately), or always with
+# FORCE_REGISTRY_REFRESH=true. It sits BEFORE generate_assets so new/renamed
+# campaigns are visible to targeting and keyword routing the same day. It is
+# the ONE fail-soft step: a failure is logged and the chain continues on
+# last week's registry (still a valid, complete snapshot), because a
+# registry hiccup must never cost a day of generation. Every other step
+# stays fail-fast, as below. Fail-soft is never SILENT: the builder exits 4
+# when it wrote a snapshot but had to carry a requested platform forward
+# (fetch failed, or its listing looked partial), and every non-zero exit
+# lands in SOFT_FAILURES -> the final COMPLETE line AND the Slack digest
+# (notify_slack.py --soft-failure). Missing LinkedIn creds are not silent
+# either (review round 2): --from-linkedin is ALWAYS passed (the builder
+# then carries LinkedIn forward and exits 4 on a refresh day), and on EVERY
+# run without /app/linkedin-ads/.env the chain records
+# registry_refresh_linkedin(creds-absent) -- or (creds-undecodable), when
+# entrypoint.sh left its .env.decode-failed marker -- as a soft failure,
+# because a Google-only snapshot advances MAX(snapshot_date) and would
+# otherwise make a frozen LinkedIn look fresh to every freshness check.
+# Deliberately Google-only? Set REGISTRY_LINKEDIN_OPTIONAL=true.
 #
 # Fail-fast, unlike the anomaly-engine's own run-daily.sh (which
 # deliberately accumulates failures and keeps going): PLAN.md Step 14 calls
@@ -56,7 +64,11 @@
 # the chain before generate_assets), REGISTRY_ACCEPT_PARTIAL="" (comma/space
 # list of google/linkedin -> --accept-partial: the partial-listing guard's
 # trip on that platform was a REAL mass removal, archive those campaigns.
-# Set it for one run -- with FORCE_REGISTRY_REFRESH=true -- then unset it).
+# Set it for one run -- with FORCE_REGISTRY_REFRESH=true -- then unset it),
+# REGISTRY_LINKEDIN_OPTIONAL=false (true = a missing linkedin-ads/.env means
+# a deliberate Google-only refresh: no --from-linkedin, no soft failure).
+# The builder itself reads REGISTRY_FETCH_RETRY_DELAYS_S (default "30,120":
+# a failed platform fetch is retried before it is carried forward).
 
 set -uo pipefail
 
@@ -81,10 +93,12 @@ FORCE_REGISTRY_REFRESH="${FORCE_REGISTRY_REFRESH:-false}"
 REGISTRY_STALE_DAYS="${REGISTRY_STALE_DAYS:-7}"
 REGISTRY_REFRESH_TIMEOUT_S="${REGISTRY_REFRESH_TIMEOUT_S:-900}"
 REGISTRY_ACCEPT_PARTIAL="${REGISTRY_ACCEPT_PARTIAL:-}"
+REGISTRY_LINKEDIN_OPTIONAL="${REGISTRY_LINKEDIN_OPTIONAL:-false}"
 
-# Fail-soft steps that failed this run, as "<name>(exit=<rc>)" (reported in
-# the final line and the Slack digest; the run still exits 0 -- see
-# run_soft_step).
+# Fail-soft steps that failed this run, as "<name>(exit=<rc>)" -- or
+# "registry_refresh_linkedin(<reason>)" for missing LinkedIn creds, see 2b --
+# (reported in the final line and the Slack digest; the run still exits 0 --
+# see run_soft_step).
 SOFT_FAILURES=()
 
 log() { echo "[run_daily] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
@@ -148,19 +162,35 @@ fi
 #     (see header). Cadence: a full refresh on Mondays IST or with
 #     FORCE_REGISTRY_REFRESH=true; on any other day --only-if-stale-days makes
 #     the builder a cheap no-op (one BQ read, no ad-API call) unless the latest
-#     snapshot is >= REGISTRY_STALE_DAYS old. LinkedIn is included only when
-#     its creds were materialized (the optional LINKEDIN_ENV_B64 Fly secret);
-#     otherwise the refresh is Google-only and LinkedIn rows are carried
-#     forward unchanged. DRY_RUN is inherited, so a dry run only writes the
-#     staging preview (which registry.py's DRY_RUN fallback then reads).
+#     snapshot is >= REGISTRY_STALE_DAYS old. LinkedIn is always requested;
+#     when its creds were not materialized (the LINKEDIN_ENV_B64 Fly secret
+#     is unset, staged-only, or undecodable) the builder carries LinkedIn
+#     forward (exit 4 on a refresh day) and this run records a
+#     registry_refresh_linkedin(...) soft failure -- unless
+#     REGISTRY_LINKEDIN_OPTIONAL=true makes Google-only deliberate. DRY_RUN
+#     is inherited, so a dry run only writes the staging preview (which
+#     registry.py's DRY_RUN fallback then reads).
 if [ "$REGISTRY_REFRESH_ENABLED" != "true" ]; then
   log "[registry_refresh] SKIPPED -- REGISTRY_REFRESH_ENABLED=$REGISTRY_REFRESH_ENABLED"
 else
   REG_ARGS=(--refresh --from-google)
-  if [ -f "${IK_MCP_DIR:-/app}/linkedin-ads/.env" ]; then
+  LI_ENV="${IK_MCP_DIR:-/app}/linkedin-ads/.env"
+  LI_SOFT_FAILURE=""
+  if [ -f "$LI_ENV" ]; then
     REG_ARGS+=(--from-linkedin)
+  elif [ "$REGISTRY_LINKEDIN_OPTIONAL" = "true" ]; then
+    log "[registry_refresh] LinkedIn creds absent and REGISTRY_LINKEDIN_OPTIONAL=true -- deliberate Google-only refresh, LinkedIn rows carried forward"
   else
-    log "[registry_refresh] LinkedIn creds absent -- Google-only refresh, LinkedIn rows carried forward"
+    # Requested anyway: the builder's FileNotFoundError path carries LinkedIn
+    # forward and exits 4 (degraded) on a day the refresh actually runs.
+    REG_ARGS+=(--from-linkedin)
+    if [ -f "$LI_ENV.decode-failed" ]; then
+      LI_SOFT_FAILURE="registry_refresh_linkedin(creds-undecodable)"
+      log "[registry_refresh] WARN: LINKEDIN_ENV_B64 is set but failed to decode (entrypoint.sh) -- LinkedIn rows stay frozen at their last fetch; fix the secret (soft failure: $LI_SOFT_FAILURE)"
+    else
+      LI_SOFT_FAILURE="registry_refresh_linkedin(creds-absent)"
+      log "[registry_refresh] WARN: LinkedIn creds absent ($LI_ENV; LINKEDIN_ENV_B64 unset or staged-only) -- LinkedIn rows stay frozen at their last fetch (soft failure: $LI_SOFT_FAILURE; REGISTRY_LINKEDIN_OPTIONAL=true if Google-only is deliberate)"
+    fi
   fi
   if [ "$IST_WEEKDAY" != "1" ] && [ "$FORCE_REGISTRY_REFRESH" != "true" ]; then
     REG_ARGS+=(--only-if-stale-days "$REGISTRY_STALE_DAYS")
@@ -178,6 +208,11 @@ else
     log "[registry_refresh] WARN: 'timeout' not found -- running without the ${REGISTRY_REFRESH_TIMEOUT_S}s bound"
   fi
   run_soft_step "registry_refresh" "${REG_CMD[@]}"
+  # Recorded on EVERY run (not only refresh days), after the builder's own
+  # entry: until the creds exist, LinkedIn is frozen whatever the builder did.
+  if [ -n "$LI_SOFT_FAILURE" ]; then
+    SOFT_FAILURES+=("$LI_SOFT_FAILURE")
+  fi
 fi
 
 # --- 3. generate_assets -- keyword + copy/angle candidate generation (the

@@ -140,6 +140,27 @@ export function judgeFreshness<T extends { table: FreshnessTable; latest_date: s
   }));
 }
 
+/**
+ * generation_runs statuses, worst first. generate_assets writes one row per
+ * path (keyword / copy / angle) per run, all sharing one run_id
+ * (generation/schemas.py GenerationRunRow; terminal statuses only). "running"
+ * is never written today; it is kept, below the terminal failures, so the
+ * caretaker bot's "busy" check in graph.ts still works if a writer adds it.
+ */
+const RUN_STATUS_ORDER = ["failed", "partial", "running", "success"] as const;
+
+/**
+ * One status for a set of generation_runs rows: the worst one present, so any
+ * failed path marks the whole run (or run day) failed. The result does not
+ * depend on row order, so two queries over the same rows always agree.
+ * Matching ignores case and surrounding whitespace. null when no row carries a
+ * recognised status (no rows, all NULL, or only unexpected values).
+ */
+export function rollUpRunStatus(statuses: readonly (string | null | undefined)[]): string | null {
+  const present = new Set(statuses.map((s) => (s ?? "").trim().toLowerCase()));
+  return RUN_STATUS_ORDER.find((s) => present.has(s)) ?? null;
+}
+
 /** Severity ranking used when rolling several child healths up into one parent (dept) health. */
 const SEVERITY: Record<Health, number> = {
   failed: 3,

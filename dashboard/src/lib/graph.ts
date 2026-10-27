@@ -54,12 +54,20 @@ export interface SystemGraphData {
   bots: DeptBot[];
 }
 
-export async function buildSystemGraph(): Promise<SystemGraphData> {
+/**
+ * `runStatus` lets the Home page hand in the same in-flight
+ * getLatestGenerationRunStatus() promise its Pipeline Health strip awaits, so
+ * the strip and the graph read one result per render and cannot disagree on
+ * whether the latest generation run failed.
+ */
+export async function buildSystemGraph(
+  runStatus: Promise<string | null> = getLatestGenerationRunStatus(),
+): Promise<SystemGraphData> {
   const [ceFreshness, mrFreshness, pmisLatest, lastRunStatus, reviewPressure] = await Promise.all([
     getCeFreshness(),
     getMarketResearchFreshness(),
     getPmisFreshness(),
-    getLatestGenerationRunStatus(),
+    runStatus,
     getReviewQueuePressure(),
   ]);
 
