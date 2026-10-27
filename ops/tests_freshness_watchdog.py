@@ -177,6 +177,11 @@ check(all(fw._IDENT_RE.match(x) for s in fw.SPECS for x in (s.dataset, s.table, 
 check(all(s.severity in fw.SEVERITIES for s in fw.SPECS), "every severity is alert|warn")
 check(all(s.max_lag_days >= 1 for s in fw.SPECS), "every max_lag_days >= 1")
 check(all(s.pipeline in fw.RUNBOOK for s in fw.SPECS), "every pipeline has a runbook hint")
+for p, log_label in [(fw.MR_JOBS, '"jobs start"'), (fw.MR_PIPELINE, '"weekly start"')]:
+    h = fw.RUNBOOK[p]
+    check("ik-ad-generator-trigger" in h and "05:30 UTC" in h and log_label in h
+          and "03:30" not in h and "ik-intelligence-trigger" not in h,
+          f"{p} runbook hint points at ik-ad-generator-trigger 05:30 UTC ({log_label} log line)")
 check(set(SNAPSHOT_2026_10_27) == set(keys), "the replayed snapshot covers exactly the SPECS keys")
 check(spec("SIP_pattern_rag.ce_campaign_registry").max_lag_days == 8
       and spec("SIP_pattern_rag.ce_campaign_registry").severity == "alert",

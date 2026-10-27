@@ -1,6 +1,7 @@
 // vitest (node env) for the ik-ad-generator-trigger Worker — added 2026-10-27
 // with the Intelligence piggyback. fetch is always stubbed: nothing here can
 // reach the Fly API.
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -490,5 +491,31 @@ describe("wrangler.toml drift guard", () => {
 
   it("never commits a token as a var", () => {
     for (const k of ["FLY_TOKEN", "FLY_TOKEN_JOBS", "FLY_TOKEN_WEEKLY", "FLY_MACHINE_ID"]) expect(v(k)).toBeUndefined();
+  });
+});
+
+describe(".gitignore guard (public repo)", () => {
+  // `git check-ignore --no-index` exits 0 when the path is ignored, 1 when not
+  // (execFileSync throws on 1). Paths are relative to cloudflare-trigger/.
+  const cwd = fileURLToPath(new URL("..", import.meta.url));
+  const ignored = (path: string) => {
+    try {
+      execFileSync("git", ["check-ignore", "--no-index", "-q", path], { cwd, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  it("ignores the local Wrangler secret files and build output", () => {
+    for (const p of [".dev.vars", ".dev.vars.production", ".env", ".env.local", ".wrangler/tmp/bundle.js"]) {
+      expect(ignored(p), p).toBe(true);
+    }
+  });
+
+  it("still tracks the source, config and lockfile", () => {
+    for (const p of ["package-lock.json", "package.json", "wrangler.toml", "src/index.ts", "test/index.test.ts"]) {
+      expect(ignored(p), p).toBe(false);
+    }
   });
 });

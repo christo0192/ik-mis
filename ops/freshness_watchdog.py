@@ -186,8 +186,9 @@ SPECS: list[TableSpec] = [
     TableSpec(_CE, "pmis_program_summary", "date", 1, ANOMALY, "warn"),
     TableSpec(_CE, "pmis_recommendations", "run_date", 2, ANOMALY, "warn"),
 
-    # -- Market Research, MONTHLY since M001 (Cloudflare ik-intelligence-trigger:
-    # jobs on the 1st, the pipeline on the 2nd, 03:30 UTC). Longest healthy gap
+    # -- Market Research, MONTHLY since M001 (Cloudflare ik-ad-generator-trigger,
+    # cron 30 5 * * *: jobs on the 1st, the pipeline on the 2nd, 05:30 UTC;
+    # ik-intelligence-trigger has no cron, free-plan quota). Longest healthy gap
     # is a 31-day month -> 35 (31 + 4 days grace). Was 63-70 days stale on
     # 2026-10-27 because the Fly-native schedule=monthly never fired.
     TableSpec(_MR, "job_market_demand", "run_date", 35, MR_JOBS),
@@ -201,8 +202,10 @@ SPECS: list[TableSpec] = [
 RUNBOOK: dict[str, str] = {
     GEN: "`fly logs -a ik-ad-generator` (daily chain run_daily.sh, 05:30 UTC)",
     ANOMALY: "`fly logs -a ik-anomaly` (daily run, 04:30 UTC)",
-    MR_JOBS: "`fly machine list -a ik-market-research-jobs` (monthly, 1st, 03:30 UTC)",
-    MR_PIPELINE: "`fly machine list -a ik-market-research-weekly` (monthly, 2nd, 03:30 UTC)",
+    MR_JOBS: ("`fly machine list -a ik-market-research-jobs` (monthly, 1st, 05:30 UTC; started by "
+              "Cloudflare Worker ik-ad-generator-trigger, check its logs for \"jobs start\")"),
+    MR_PIPELINE: ("`fly machine list -a ik-market-research-weekly` (monthly, 2nd, 05:30 UTC; started by "
+                  "Cloudflare Worker ik-ad-generator-trigger, check its logs for \"weekly start\")"),
 }
 
 

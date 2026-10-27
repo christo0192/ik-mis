@@ -17,7 +17,7 @@
 // ad-content-creator cloudflare-trigger/src/index.ts.
 
 export interface Env {
-  FLY_TOKEN: string; // Cloudflare secret — Fly Personal Access Token
+  FLY_TOKEN: string; // Cloudflare secret — Fly API token for ik-ad-generator, always sent as `Bearer ${FLY_TOKEN}` (unchanged since July)
   FLY_APP: string; // var, "ik-ad-generator"
   FLY_MACHINE_ID: string; // secret/var — set after first fly deploy
   // Intelligence targets (2026-10-27). Optional at the type level because a
@@ -70,8 +70,9 @@ export function intelligenceTargetForDay(dayOfMonthUtc: number, env: Env): Targe
 }
 
 /** Fly deploy tokens (`fly tokens create deploy`) print as "FlyV1 fm2_…" and are
- *  sent as-is, the way flyctl sends macaroons; anything else (the generator's
- *  Personal Access Token) goes as Bearer — the same header as before. Trimmed
+ *  sent as-is, the way flyctl sends macaroons; anything else goes as Bearer.
+ *  Used for the Intelligence tokens only: the generator start bypasses this and
+ *  keeps its exact pre-2026-10-27 header (see startGenerator). Trimmed
  *  because a token piped into `wrangler secret put` can carry a trailing
  *  newline (fetch strips that from header values anyway). */
 export function authHeader(token: string): string {
