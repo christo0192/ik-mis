@@ -1,0 +1,11 @@
+# Files that ship into Linux containers / CI must stay LF even on Windows
+# checkouts with core.autocrlf=true (CRLF breaks shebangs: "bash\r: not found").
+# Added 2026-10-27 (pipeline-freshness fixes), mirroring google-ads-meta-ads-engine.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
