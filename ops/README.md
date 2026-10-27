@@ -60,7 +60,9 @@ is 1. The two cadence-based exceptions:
   plus a catch-up whenever the snapshot is more than 7 days old.
 - **Monthly Market Research, SLA 35.** The longest healthy gap is a 31-day
   month, plus 4 days of grace. Jobs run on the 1st and the pipeline on the
-  2nd, both at 03:30 UTC from the Cloudflare `ik-intelligence-trigger`.
+  2nd, both at 05:30 UTC (11:00 IST) from the MIS Worker
+  `ik-ad-generator-trigger` (`cloudflare-trigger/`; the standalone
+  `ik-intelligence-trigger` has no cron: Cloudflare free-plan limit).
 
 The `pmis_*_summary` and `pmis_recommendations` tables are **warn** because the
 MIS dashboard does not read them, and if the whole anomaly run dies,

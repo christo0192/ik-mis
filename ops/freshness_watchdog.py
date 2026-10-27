@@ -186,8 +186,9 @@ SPECS: list[TableSpec] = [
     TableSpec(_CE, "pmis_program_summary", "date", 1, ANOMALY, "warn"),
     TableSpec(_CE, "pmis_recommendations", "run_date", 2, ANOMALY, "warn"),
 
-    # -- Market Research, MONTHLY since M001 (Cloudflare ik-intelligence-trigger:
-    # jobs on the 1st, the pipeline on the 2nd, 03:30 UTC). Longest healthy gap
+    # -- Market Research, MONTHLY since M001 (Cloudflare ik-ad-generator-trigger,
+    # cron 30 5 * * *: jobs on the 1st, the pipeline on the 2nd, 05:30 UTC;
+    # ik-intelligence-trigger has no cron, free-plan quota). Longest healthy gap
     # is a 31-day month -> 35 (31 + 4 days grace). Was 63-70 days stale on
     # 2026-10-27 because the Fly-native schedule=monthly never fired.
     TableSpec(_MR, "job_market_demand", "run_date", 35, MR_JOBS),
@@ -201,8 +202,10 @@ SPECS: list[TableSpec] = [
 RUNBOOK: dict[str, str] = {
     GEN: "`fly logs -a ik-ad-generator` (daily chain run_daily.sh, 05:30 UTC)",
     ANOMALY: "`fly logs -a ik-anomaly` (daily run, 04:30 UTC)",
-    MR_JOBS: "`fly machine list -a ik-market-research-jobs` (monthly, 1st, 03:30 UTC)",
-    MR_PIPELINE: "`fly machine list -a ik-market-research-weekly` (monthly, 2nd, 03:30 UTC)",
+    MR_JOBS: ("`fly machine list -a ik-market-research-jobs` (monthly, 1st, 05:30 UTC; started by "
+              "Cloudflare Worker ik-ad-generator-trigger, check its logs for \"jobs start\")"),
+    MR_PIPELINE: ("`fly machine list -a ik-market-research-weekly` (monthly, 2nd, 05:30 UTC; started by "
+                  "Cloudflare Worker ik-ad-generator-trigger, check its logs for \"weekly start\")"),
 }
 
 
@@ -488,11 +491,19 @@ def bq_project() -> str:
     return project
 
 
+def _secret_env(name: str) -> str:
+    """Env secret with surrounding whitespace AND a leading UTF-8 BOM removed.
+    Windows PowerShell 5.1 can prepend a BOM when a value is piped into
+    `gh secret set` (2026-10-27: WATCHDOG_BQ_SA_JSON arrived as 'not valid
+    JSON'); str.strip() alone leaves U+FEFF in place."""
+    return os.environ.get(name, "").strip().lstrip("﻿").strip()
+
+
 def build_client():
     """BigQuery client from WATCHDOG_BQ_SA_JSON (parsed in memory, never
     written to disk). Raises WatchdogConfigError / ImportError; never
     includes the key material in an error message."""
-    raw = os.environ.get("WATCHDOG_BQ_SA_JSON", "").strip()
+    raw = _secret_env("WATCHDOG_BQ_SA_JSON")
     if not raw:
         raise WatchdogConfigError("WATCHDOG_BQ_SA_JSON is not set")
     try:
@@ -568,7 +579,7 @@ def _redact(text: str) -> str:
     """Belt and braces: no code path here formats a secret into a message,
     but a third-party exception string could echo one back."""
     for name in _SECRET_ENVS:
-        value = os.environ.get(name, "").strip()
+        value = _secret_env(name)
         if len(value) >= 8 and value in text:
             text = text.replace(value, "[REDACTED]")
     return text
@@ -752,8 +763,8 @@ def main(argv=None) -> int:
         today = today_ist()
     dry_run = args.dry_run or _env_true("WATCHDOG_DRY_RUN")
 
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    channel = os.environ.get("SLACK_CHANNEL_ID", "").strip()
+    token = _secret_env("SLACK_BOT_TOKEN")
+    channel = _secret_env("SLACK_CHANNEL_ID")
     if not dry_run and (not token or not channel):
         missing = [n for n, v in (("SLACK_BOT_TOKEN", token), ("SLACK_CHANNEL_ID", channel))
                    if not v]

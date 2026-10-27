@@ -1,0 +1,11 @@
+# Track the lockfile (added 2026-10-27): CI runs `npm ci`, which needs it. This
+# overrides the repo-root `cloudflare-trigger/package-lock.json` ignore rule.
+!package-lock.json
+
+# Local Wrangler state (added 2026-10-27). `npm run dev` (--test-scheduled) reads
+# FLY_TOKEN / FLY_TOKEN_JOBS / FLY_TOKEN_WEEKLY from .dev.vars (or .env); those
+# are production Fly credentials and this repo is PUBLIC. `wrangler deploy`
+# writes bundles into .wrangler/tmp.
+.dev.vars*
+.env*
+.wrangler/

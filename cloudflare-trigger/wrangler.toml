@@ -10,8 +10,30 @@
 # Cloned from the proven /mnt/c/mcp-servers/anomaly-engine/cloudflare-trigger/
 # (same account, same Worker shape, own cron + own Fly app target).
 #
-# Deploy:  wrangler deploy
+# ALSO the Intelligence monthly scheduler (added 2026-10-27). The dedicated
+# ik-intelligence-trigger Worker (ad-content-creator repo) was refused its cron:
+# this account is at the Workers Free limit of 5 cron triggers per account
+# (code 10072). To stay free, this Worker's existing single cron piggybacks
+# the two Intelligence Fly batch machines, dispatched in src/index.ts on the
+# UTC day of event.scheduledTime:
+#   every day -> start ik-ad-generator (unchanged, independent)
+#   day 1     -> ALSO start ik-market-research-jobs   machine 7845393fe26338 (FLY_TOKEN_JOBS)
+#   day 2     -> ALSO start ik-market-research-weekly machine 7812565f9d3378 (FLY_TOKEN_WEEKLY)
+# The starts run concurrently; an Intelligence failure or missing config only
+# logs and never blocks or delays the generator. Trade-off accepted: on the
+# 1st/2nd the generator runs at the same 05:30 UTC and reads the previous
+# month's Market_Research snapshot -- acceptable for monthly data. The
+# Fly-native `--schedule monthly` on those machines never fired; this Worker is
+# their ONLY scheduler, so never also set a Fly schedule on them, and never
+# deploy ik-intelligence-trigger with a cron alongside this.
+#
+# Deploy:  npm ci && npx wrangler deploy
 # Secrets: wrangler secret put FLY_TOKEN ; wrangler secret put FLY_MACHINE_ID
+#          plus the two app-scoped Fly deploy tokens for Intelligence, piped
+#          straight in so they are never echoed (record the creation date:
+#          -x 26280h = 3-year expiry):
+#   fly tokens create deploy -a ik-market-research-jobs   -n ik-ad-generator-trigger -x 26280h | npx wrangler secret put FLY_TOKEN_JOBS
+#   fly tokens create deploy -a ik-market-research-weekly -n ik-ad-generator-trigger -x 26280h | npx wrangler secret put FLY_TOKEN_WEEKLY
 
 name = "ik-ad-generator-trigger"
 main = "src/index.ts"
@@ -20,12 +42,21 @@ workers_dev = false
 account_id = "bbb3aa03755ccab33b6367bb6367294c"   # same Cloudflare account as ik-anomaly-trigger; non-secret
 
 # 05:30 UTC = 11:00 IST (UTC+5:30) -- 1 hour after ik-anomaly's 04:30 UTC / 10:00 IST run.
+# The ONLY cron: do not add another (account cron quota, see header).
+# MUST equal CRON in src/index.ts (test/index.test.ts fails on drift).
 [triggers]
 crons = ["30 5 * * *"]
 
 [vars]
 FLY_APP = "ik-ad-generator"
 # FLY_MACHINE_ID set via `wrangler secret put FLY_MACHINE_ID` after first `fly deploy`.
+# Intelligence targets (non-secret). If a machine is ever recreated, update its
+# ID here and redeploy (the jobs app must never get a plain `fly deploy` -- see
+# job_market_agent/DEPLOY_FLY.md in the ad-content-creator repo).
+JOBS_APP = "ik-market-research-jobs"
+JOBS_MACHINE_ID = "7845393fe26338"
+WEEKLY_APP = "ik-market-research-weekly"
+WEEKLY_MACHINE_ID = "7812565f9d3378"
 
 [observability]
 enabled = true

@@ -177,6 +177,11 @@ check(all(fw._IDENT_RE.match(x) for s in fw.SPECS for x in (s.dataset, s.table, 
 check(all(s.severity in fw.SEVERITIES for s in fw.SPECS), "every severity is alert|warn")
 check(all(s.max_lag_days >= 1 for s in fw.SPECS), "every max_lag_days >= 1")
 check(all(s.pipeline in fw.RUNBOOK for s in fw.SPECS), "every pipeline has a runbook hint")
+for p, log_label in [(fw.MR_JOBS, '"jobs start"'), (fw.MR_PIPELINE, '"weekly start"')]:
+    h = fw.RUNBOOK[p]
+    check("ik-ad-generator-trigger" in h and "05:30 UTC" in h and log_label in h
+          and "03:30" not in h and "ik-intelligence-trigger" not in h,
+          f"{p} runbook hint points at ik-ad-generator-trigger 05:30 UTC ({log_label} log line)")
 check(set(SNAPSHOT_2026_10_27) == set(keys), "the replayed snapshot covers exactly the SPECS keys")
 check(spec("SIP_pattern_rag.ce_campaign_registry").max_lag_days == 8
       and spec("SIP_pattern_rag.ce_campaign_registry").severity == "alert",
@@ -606,6 +611,13 @@ for raw, label in [(None, "unset"), ("not json {", "not JSON"), ('{"type": "user
         check(False, f"build_client rejects {label}")
     except fw.WatchdogConfigError as exc:
         check("not json {" not in str(exc), f"build_client: {label} -> WatchdogConfigError ({exc})")
+# A leading UTF-8 BOM (Windows PowerShell 5.1 pipe into `gh secret set`,
+# 2026-10-27) must not make a valid key or token look broken.
+reset_env(WATCHDOG_BQ_SA_JSON='﻿{"type": "service_account"}\r\n', SLACK_BOT_TOKEN="﻿xoxb-1-abc \n")
+check(fw._secret_env("WATCHDOG_BQ_SA_JSON") == '{"type": "service_account"}',
+      "_secret_env: strips a leading BOM + whitespace from the SA JSON")
+check(fw._secret_env("SLACK_BOT_TOKEN") == "xoxb-1-abc", "_secret_env: strips a leading BOM from the Slack token")
+check(fw._secret_env("SLACK_CHANNEL_ID") == "", "_secret_env: unset -> empty string")
 reset_env(BQ_PROJECT="bad project!")
 try:
     fw.bq_project()
