@@ -1,7 +1,8 @@
 # Fly.io image -- ik-ad-generator (PLAN.md Phase 1 Step 14).
 # Scheduled batch container for the Generation department's daily pipeline
-# chain (see run_daily.sh): collect_kw_perf -> lead_quality -> generate_assets
-# -> gate_keywords -> export_negatives -> instrument -> notify_slack.
+# chain (see run_daily.sh): collect_kw_perf -> lead_quality -> registry_refresh
+# (weekly, fail-soft) -> generate_assets -> gate_keywords -> export_negatives
+# -> instrument -> notify_slack.
 #
 # Pattern cloned from the proven /mnt/c/mcp-servers/anomaly-engine/fly-deploy/
 # Dockerfile (Node 20 + @anthropic-ai/claude-code CLI + non-root user,
@@ -15,7 +16,11 @@
 # fly-deploy/vendor/slack-tools/slack_post.py's own docstring for why.
 #
 # Deploy from the MIS repo root:
-#   fly deploy . --config fly.toml --dockerfile fly-deploy/Dockerfile
+#   fly deploy . --config fly.toml --dockerfile fly-deploy/Dockerfile --ha=false
+# --ha=false: the app must have exactly ONE machine (e820794c74d708, the
+# Cloudflare Worker's FLY_MACHINE_ID) -- see fly.toml's header.
+# coreutils `timeout` (bounds run_daily.sh's registry_refresh step) ships in
+# this Debian base image; no extra package needed.
 
 FROM python:3.12-slim
 

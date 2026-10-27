@@ -2,9 +2,23 @@
 # Daily Generation-department pipeline chain -- PLAN.md Phase 1 Step 14
 # ("Schedule the generator").
 #
-# Chain (in order): collect_kw_perf -> lead_quality (Mondays-IST-only, or
-# --force/FORCE_LEAD_QUALITY=true) -> generate_assets -> gate_keywords ->
-# export_negatives -> instrument -> notify_slack.
+# Chain (in order): collect_kw_perf -> lead_quality (daily by default;
+# LEAD_QUALITY_WEEKLY=true for Mondays-IST-only) -> registry_refresh
+# (weekly, FAIL-SOFT) -> generate_assets -> gate_keywords -> export_negatives
+# -> instrument -> notify_slack.
+#
+# registry_refresh (added 2026-10-27; the campaign registry had been frozen
+# at its one-shot 2026-07-04 backfill): build_campaign_registry.py --refresh
+# re-lists the live Google (+ LinkedIn, when /app/linkedin-ads/.env exists)
+# campaigns and writes a complete carry-forward snapshot. Runs on Mondays
+# IST, on ANY day the latest snapshot is >= REGISTRY_STALE_DAYS old
+# (catch-up: the first run after deploy, or after a missed Monday, refreshes
+# immediately), or always with FORCE_REGISTRY_REFRESH=true. It sits BEFORE
+# generate_assets so new/renamed campaigns are visible to targeting and
+# keyword routing the same day. It is the ONE fail-soft step: a failure is
+# logged and the chain continues on last week's registry (still a valid,
+# complete snapshot), because a registry hiccup must never cost a day of
+# generation. Every other step stays fail-fast, as below.
 #
 # Fail-fast, unlike the anomaly-engine's own run-daily.sh (which
 # deliberately accumulates failures and keeps going): PLAN.md Step 14 calls
@@ -28,7 +42,14 @@
 #   ./run_daily.sh                          # DRY_RUN=true (default), lead_quality only on Mondays IST
 #   DRY_RUN=false ./run_daily.sh            # live run
 #   FORCE_LEAD_QUALITY=true ./run_daily.sh  # run lead_quality regardless of weekday
+#   FORCE_REGISTRY_REFRESH=true ./run_daily.sh   # refresh the registry regardless of weekday/staleness
+#   REGISTRY_REFRESH_ENABLED=false ./run_daily.sh  # skip the registry refresh entirely
 #   GENERATION_PYTHON_BIN=/path/to/venv/bin/python3 ./run_daily.sh   # local testing outside the container
+#
+# Registry env (defaults): REGISTRY_REFRESH_ENABLED=true,
+# FORCE_REGISTRY_REFRESH=false, REGISTRY_STALE_DAYS=7,
+# REGISTRY_REFRESH_TIMEOUT_S=900 (hard bound so a hung API call can't stall
+# the chain before generate_assets).
 
 set -uo pipefail
 
@@ -48,6 +69,14 @@ FORCE_LEAD_QUALITY="${FORCE_LEAD_QUALITY:-false}"
 # died right after collect_kw_perf, before generate_assets ever ran).
 LEAD_QUALITY_WEEKLY="${LEAD_QUALITY_WEEKLY:-false}"
 INSTRUMENT_WINDOW_DAYS="${INSTRUMENT_WINDOW_DAYS:-7}"
+REGISTRY_REFRESH_ENABLED="${REGISTRY_REFRESH_ENABLED:-true}"
+FORCE_REGISTRY_REFRESH="${FORCE_REGISTRY_REFRESH:-false}"
+REGISTRY_STALE_DAYS="${REGISTRY_STALE_DAYS:-7}"
+REGISTRY_REFRESH_TIMEOUT_S="${REGISTRY_REFRESH_TIMEOUT_S:-900}"
+
+# Names of fail-soft steps that failed this run (reported at the end; the
+# run still exits 0 -- see run_soft_step).
+SOFT_FAILURES=()
 
 log() { echo "[run_daily] $(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
 
@@ -69,6 +98,24 @@ run_step() {
   log "[$name] OK"
 }
 
+# run_soft_step <step-name> <command...> -- like run_step, but a non-zero
+# exit is logged and recorded in SOFT_FAILURES and the chain CONTINUES. Only
+# for steps whose failure leaves the previous good state in place (today:
+# registry_refresh -- a failed refresh writes nothing, so last week's
+# complete snapshot stays current).
+run_soft_step() {
+  local name="$1"; shift
+  log "[$name] starting (fail-soft): $*"
+  "$@"
+  local rc=$?
+  if [ "$rc" -ne 0 ]; then
+    log "[$name] FAILED (exit=$rc) -- fail-soft, continuing chain"
+    SOFT_FAILURES+=("$name")
+  else
+    log "[$name] OK"
+  fi
+}
+
 # --- 1. collect_kw_perf -- yesterday's search-term/keyword performance feed.
 run_step "collect_kw_perf" "$PYTHON" "$GENDIR/collect_kw_perf.py"
 
@@ -85,6 +132,36 @@ if [ "$LEAD_QUALITY_WEEKLY" != "true" ] || [ "$IST_WEEKDAY" = "1" ] || [ "$FORCE
   run_step "lead_quality" "$PYTHON" "$GENDIR/lead_quality.py"
 else
   log "[lead_quality] SKIPPED -- LEAD_QUALITY_WEEKLY=true and not Monday IST (weekday=$IST_WEEKDAY); FORCE_LEAD_QUALITY=true overrides"
+fi
+
+# --- 2b. registry_refresh -- weekly carry-forward campaign registry snapshot
+#     (see header). Cadence: a full refresh on Mondays IST or with
+#     FORCE_REGISTRY_REFRESH=true; on any other day --only-if-stale-days makes
+#     the builder a cheap no-op (one BQ read, no ad-API call) unless the latest
+#     snapshot is >= REGISTRY_STALE_DAYS old. LinkedIn is included only when
+#     its creds were materialized (the optional LINKEDIN_ENV_B64 Fly secret);
+#     otherwise the refresh is Google-only and LinkedIn rows are carried
+#     forward unchanged. DRY_RUN is inherited, so a dry run only writes the
+#     staging preview (which registry.py's DRY_RUN fallback then reads).
+if [ "$REGISTRY_REFRESH_ENABLED" != "true" ]; then
+  log "[registry_refresh] SKIPPED -- REGISTRY_REFRESH_ENABLED=$REGISTRY_REFRESH_ENABLED"
+else
+  REG_ARGS=(--refresh --from-google)
+  if [ -f "${IK_MCP_DIR:-/app}/linkedin-ads/.env" ]; then
+    REG_ARGS+=(--from-linkedin)
+  else
+    log "[registry_refresh] LinkedIn creds absent -- Google-only refresh, LinkedIn rows carried forward"
+  fi
+  if [ "$IST_WEEKDAY" != "1" ] && [ "$FORCE_REGISTRY_REFRESH" != "true" ]; then
+    REG_ARGS+=(--only-if-stale-days "$REGISTRY_STALE_DAYS")
+  fi
+  REG_CMD=("$PYTHON" "$GENDIR/build_campaign_registry.py" "${REG_ARGS[@]}")
+  if command -v timeout >/dev/null 2>&1; then
+    REG_CMD=(timeout "$REGISTRY_REFRESH_TIMEOUT_S" "${REG_CMD[@]}")
+  else
+    log "[registry_refresh] WARN: 'timeout' not found -- running without the ${REGISTRY_REFRESH_TIMEOUT_S}s bound"
+  fi
+  run_soft_step "registry_refresh" "${REG_CMD[@]}"
 fi
 
 # --- 3. generate_assets -- keyword + copy/angle candidate generation (the
@@ -122,5 +199,9 @@ if [ "$DRY_RUN" = "false" ]; then
 fi
 run_step "notify_slack" "$PYTHON" "$GENDIR/notify_slack.py" "${NOTIFY_ARGS[@]}"
 
-log "================ ik-ad-generator daily run COMPLETE -- all steps ok ================"
+if [ "${#SOFT_FAILURES[@]}" -gt 0 ]; then
+  log "================ ik-ad-generator daily run COMPLETE -- fail-soft step(s) FAILED: ${SOFT_FAILURES[*]} (all other steps ok) ================"
+else
+  log "================ ik-ad-generator daily run COMPLETE -- all steps ok ================"
+fi
 exit 0

@@ -1,12 +1,15 @@
 # Deploy — Vercel (via GitHub)
 
-Repo: **https://github.com/christo0192/ik-market-research-dashboard** (private)
-The Next.js app is at the **repo root**, so Vercel auto-detects it.
+> **Start at [`../VERCEL-DEPLOY.md`](../VERCEL-DEPLOY.md)** (repo root) for the Vercel
+> project setup. The dashboard now lives in `dashboard/` of **`christo0192/ik-mis`**
+> (Vercel **Root Directory = `dashboard`**), not at the root of the old standalone
+> `ik-market-research-dashboard` repo this file originally described (corrected
+> 2026-10-27). Merges to `main` auto-deploy Production; each PR gets a Preview.
+> The sections below are kept for app-level detail (BQ auth, write-route auth).
 
 ## 1. Import the repo into Vercel
-1. Vercel → **Add New… → Project** → import `christo0192/ik-market-research-dashboard`.
-2. Framework preset: **Next.js** (auto). Root directory: **`./`**. Build/Output: defaults
-   (`next build`). No overrides needed.
+See [`../VERCEL-DEPLOY.md`](../VERCEL-DEPLOY.md) → "Vercel project settings"
+(import `christo0192/ik-mis`, Root Directory `dashboard`, Next.js preset, default build).
 
 ## 2. Set the one required env var (BigQuery auth)
 The app authenticates to BigQuery with a base64-encoded service-account JSON in

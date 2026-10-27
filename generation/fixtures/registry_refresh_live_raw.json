@@ -1,0 +1,114 @@
+[
+  {
+    "platform": "google",
+    "campaign_id": "9001",
+    "campaign_name": "IK-IN_YouTube_Awareness_Q3_INDIA",
+    "status": "PAUSED",
+    "channel_type": "VIDEO"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9002",
+    "campaign_name": "IK-IN_Search_NB_EdgeUp_Higher_Education",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9003",
+    "campaign_name": "IK-IN_Search_NB_FDE_35-54",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9005",
+    "campaign_name": "IK-IN_Brand_Flagship_INDIA",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9006",
+    "campaign_name": "IK-IN_Search_NB_LevelUp_Generic_Allsale_HI_INDIA",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9007",
+    "campaign_name": "IK-IN_Discovery_EdgeUp_InMarket_TechnologyIndustry_INDIA",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9008",
+    "campaign_name": "IK-IN_Search_NB_EdgeUp_Generic_AI_35-54",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9009",
+    "campaign_name": "IK-IN_PMax_LevelUp_INDIA",
+    "status": "PAUSED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9010",
+    "campaign_name": "IK-IN_Brand_Generic_INDIA",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9011",
+    "campaign_name": "IK-IN_Search_DS_LevelUp_SystemDesign_INDIA",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9012",
+    "campaign_name": "Google | Display | Targeted Audiences | July 2025",
+    "status": "PAUSED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "google",
+    "campaign_id": "9100",
+    "campaign_name": "IK-IN_Search_NB_EdgeUp_Program_Details",
+    "status": "ENABLED",
+    "channel_type": "SEARCH"
+  },
+  {
+    "platform": "linkedin",
+    "campaign_id": "7001",
+    "campaign_name": "IK-IN_LinkedIn_PWC_AgenticAI_Carousel_Predictive_SWE_T1",
+    "status": "ACTIVE",
+    "channel_type": "SPONSORED_UPDATES"
+  },
+  {
+    "platform": "linkedin",
+    "campaign_id": "7002",
+    "campaign_name": "IK-IN_LinkedIn_PWC_AgenticAI_Carousel_Predictive_SWE_T1",
+    "status": "PAUSED",
+    "channel_type": "SPONSORED_UPDATES"
+  },
+  {
+    "platform": "linkedin",
+    "campaign_id": "7003",
+    "campaign_name": "IK-IN_LinkedIn_EdgeUp_Conversation_EM_JF",
+    "status": "ACTIVE",
+    "channel_type": "SPONSORED_UPDATES"
+  },
+  {
+    "platform": "linkedin",
+    "campaign_id": "7004",
+    "campaign_name": "IK-IN_LinkedIn_FDE_Pilot_Lookalike",
+    "status": "ACTIVE",
+    "channel_type": "SPONSORED_UPDATES"
+  }
+]

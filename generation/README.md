@@ -1213,13 +1213,17 @@ no-BQ-write-calls invariant, and a subprocess end-to-end CLI run
 ## Step 14: schedule the generator (`run_daily.sh`, `fly-deploy/`, `fly.toml`, `cloudflare-trigger/`)
 
 **Chain** (`run_daily.sh`, MIS repo root): `collect_kw_perf` -> `lead_quality`
-(Mondays-IST-only, via `TZ='Asia/Kolkata' date +%u`, unless `--force`/
-`FORCE_LEAD_QUALITY=true`) -> `generate_assets` -> `gate_keywords` ->
+(daily by default since 2026-07-11; `LEAD_QUALITY_WEEKLY=true` restores
+Mondays-IST-only, via `TZ='Asia/Kolkata' date +%u`; `FORCE_LEAD_QUALITY=true`
+always runs it) -> `registry_refresh` (weekly, **fail-soft** -- see "Weekly
+registry refresh" below) -> `generate_assets` -> `gate_keywords` ->
 `export_negatives` -> `instrument` -> `notify_slack`. Per-step logging
 (`[run_daily] <UTC-ts> [<step>] starting/OK/FAILED`); **a non-zero exit
 stops the chain immediately** (deliberately fail-fast, unlike the
 anomaly-engine's own `run-daily.sh` which accumulates failures and keeps
-going -- this step's PLAN.md entry calls for the stricter behavior).
+going -- this step's PLAN.md entry calls for the stricter behavior). The one
+exception is `registry_refresh`, which logs a failure and lets the chain
+continue on the previous (complete) registry snapshot.
 `DRY_RUN` is read from the environment (default `true`, matching
 `config.py`'s own default) and propagates to every child process unchanged.
 
@@ -1252,6 +1256,7 @@ Secrets set (`flyctl secrets ... -a ik-ad-generator`):
 | `GOOGLE_ADS_ENV_B64` | base64 of `/mnt/c/mcp-servers/google-ads/.env` |
 | `SLACK_ENV_B64` | base64 of `/mnt/c/mcp-servers/slack-tools/.env` |
 | `GENERATION_BQ_SERVICE_ACCOUNT_B64` | base64 of `/mnt/c/Users/Admin/.gcp-keys/claude-code-dev-bq.json` |
+| `LINKEDIN_ENV_B64` (optional, 2026-10-27) | base64 of `C:\mcp-servers\linkedin-ads\.env` -- only the weekly registry refresh uses it; unset = Google-only refresh (see below) |
 
 `entrypoint.sh` materializes these into `/app/google-ads/.env`,
 `/app/slack-tools/.env`, and `/tmp/generation_bq_service_account.json`
@@ -1353,6 +1358,89 @@ wrangler deploy
 # 5. Verify
 wrangler trigger ik-ad-generator-trigger --remote
 ```
+
+## Weekly registry refresh (`build_campaign_registry.py --refresh`, `run_daily.sh` step 2b)
+
+Added 2026-10-27. Until then `campaign_registry` held exactly one snapshot --
+the one-shot 2026-07-04 backfill -- so the dashboard's /registry tile was
+stale, and `generate_assets`/`keyword_routing` targeted July's campaign set
+while the accounts drifted (16 new + 3 renamed Google ids, 45 new LinkedIn
+ids by October).
+
+**What a refresh does.** It reads the prior registry (live: latest row per
+key across all snapshots; DRY_RUN: the local staging preview), re-lists the
+live campaigns, and writes ONE new, COMPLETE snapshot partition for today
+(`WRITE_TRUNCATE` on `snapshot_date`, so a same-day re-run replaces rather
+than duplicates). Rows are keyed on `(platform, platform_campaign_id)` --
+never the name alone (3 LinkedIn names are shared by 2 ids each); a prior
+row with no id matches by name.
+
+| Case | Result |
+|---|---|
+| new id | auto-classified with the backfill rules, `registered_at` = now |
+| same id, same name | segment/program/geo/funnel_stage/utm_*/registered_at copied verbatim (manual fixes survive); status + snapshot_date updated |
+| same id, renamed | `campaign_name` + `utm_campaign` = new name; classification re-derived from the new name if the old one was still auto-equal, else kept as a manual override (logged) |
+| prior id missing from a platform that WAS fetched | carried forward as `archived` (reported once, as "disappeared") |
+| prior id on a platform whose fetch failed / was skipped | carried forward unchanged |
+
+**Guards (nothing is written when any of these fire):** prior registry
+unreadable in live mode -> exit 2; no platform fetched -> exit 1; merged
+snapshot smaller than `ceil(min_retain_ratio x prior)` -> exit 3. A fetched
+platform that lost more than `1 - min_retain_ratio` of its prior
+not-archived campaigns (default ratio 0.9) is treated as a PARTIAL listing
+(e.g. the July pagination truncation) and carried forward instead of
+archiving them. Completeness matters because the dashboard and
+`registry.py` read only `MAX(snapshot_date)`: an incomplete snapshot would
+blank every campaign missing from it.
+
+**Report.** `generation/staging/campaign_registry_refresh_<date>.md` (New
+since last snapshot / Renamed / Status changes / Disappeared (archived) /
+Manual overrides kept, then the usual needs-attention + all-campaigns
+tables) -- the tracked `docs/campaign-registry-backfill.md` is only touched
+with an explicit `--out-md`. One summary log line:
+`REGISTRY_REFRESH snapshot=... total=... google=... linkedin=... new=... renamed=... status_changed=... disappeared=... overrides_kept=... carried_unfetched=... needs_attention=... sources=google:fetched,linkedin:carried`.
+
+**Cadence (`run_daily.sh`).** Full refresh on Mondays IST or with
+`FORCE_REGISTRY_REFRESH=true`; on every other day the step passes
+`--only-if-stale-days $REGISTRY_STALE_DAYS`, a cheap no-op (one BQ read, no
+ad-API call) unless the latest snapshot is at least that many days old --
+so the first run after deploy (latest snapshot 2026-07-04) and any missed
+Monday self-heal immediately. It runs after `lead_quality` and before
+`generate_assets`, wrapped in `timeout $REGISTRY_REFRESH_TIMEOUT_S`, and is
+the chain's only fail-soft step.
+
+| Env (`run_daily.sh`) | Default | Meaning |
+|---|---|---|
+| `REGISTRY_REFRESH_ENABLED` | `true` | `false` skips the step entirely |
+| `FORCE_REGISTRY_REFRESH` | `false` | `true` = refresh regardless of weekday/staleness |
+| `REGISTRY_STALE_DAYS` | `7` | catch-up threshold for non-Monday runs |
+| `REGISTRY_REFRESH_TIMEOUT_S` | `900` | hard bound on the builder |
+| `LINKEDIN_API_VERSION` | `202610` | `LinkedIn-Version` header (YYYYMM). On a 426 the builder probes the current UTC month back 12 months (at most 13 calls), uses the first 2xx and logs `bump LINKEDIN_API_VERSION` |
+
+**LinkedIn is optional.** It is fetched only when
+`${IK_MCP_DIR:-/app}/linkedin-ads/.env` exists, i.e. when the optional
+`LINKEDIN_ENV_B64` Fly secret is set (`entrypoint.sh` decodes it with a
+guard, so a bad value logs a warning instead of killing the container).
+Without it the refresh is Google-only and every LinkedIn row is carried
+forward unchanged. The builder refreshes the access token in memory on a
+401, so only the refresh token needs to stay valid (probed 2026-10-27: about
+148 days left, i.e. until about 2027-03-24 -- `ops/freshness_watchdog.py`
+tracks it); when it lapses, the LinkedIn fetch fails and LinkedIn is carried
+forward with a warning.
+
+```bash
+DRY_RUN=true python generation/build_campaign_registry.py --refresh \
+  --from-fixture generation/fixtures/registry_refresh_live_raw.json \
+  --prior-fixture generation/fixtures/registry_prior_snapshot.json \
+  --snapshot-date 2026-11-02        # offline: fixtures in, staging preview + report out
+```
+
+Tests: `tests_registry.py` (merge cases r1-r10, CLI cases c1-c9, the
+LinkedIn-Version fallback with mocked HTTP, the latest-snapshot query) and
+`tests_run_daily.py` (runs the real `run_daily.sh` against a stub `python`:
+fail-soft ordering, the `--from-linkedin` / `--only-if-stale-days` flags,
+the timeout bound, plus `entrypoint.sh`'s optional `LINKEDIN_ENV_B64`
+handling).
 
 ## Step 15: value-ledger + acceptance-rate instrumentation (`instrument.py`)
 

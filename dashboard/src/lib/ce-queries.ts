@@ -1,6 +1,7 @@
 import "server-only";
 
 import { CE_TABLES, PMIS_TABLES, safeQuery, type SafeResult } from "@/lib/bq";
+import type { FreshnessTable } from "@/lib/health";
 
 /**
  * SERVER-ONLY query layer for the MIS Generation department's `ce_*` tables
@@ -206,7 +207,8 @@ export interface CampaignAssetSummary {
 }
 
 export interface CeFreshnessRow {
-  table: string;
+  /** Typed against health.ts FRESHNESS_SLA so every freshness label must carry its own cadence SLA. */
+  table: FreshnessTable;
   latest_date: string | null;
 }
 
@@ -981,8 +983,11 @@ export async function getLeadQualityHeadline(): Promise<
 // Pipeline freshness (Home vital-sign: N healthy / N stale / N failed)
 // ---------------------------------------------------------------------------
 
-/** table label -> (fully-qualified table, partition column). Mirrors generation/schemas.py PARTITION_FIELDS. */
-const FRESHNESS_SOURCES: Array<[label: string, table: string, col: string]> = [
+/**
+ * table label -> (fully-qualified table, partition column). Mirrors generation/schemas.py PARTITION_FIELDS.
+ * The label is a FreshnessTable, so adding a source here without an SLA entry in health.ts fails `tsc`.
+ */
+const FRESHNESS_SOURCES: Array<[label: FreshnessTable, table: string, col: string]> = [
   ["campaign_registry", CE_TABLES.campaignRegistry, "snapshot_date"],
   ["keyword_candidates", CE_TABLES.keywordCandidates, "run_date"],
   ["keyword_rejects", CE_TABLES.keywordRejects, "run_date"],
@@ -998,7 +1003,7 @@ const FRESHNESS_SOURCES: Array<[label: string, table: string, col: string]> = [
 /**
  * MAX(partition column) per Generation-dept table. Each table is queried
  * independently (not one UNION ALL) so one missing table doesn't blank out
- * freshness for the other eleven.
+ * freshness for the other nine.
  */
 export async function getCeFreshness(): Promise<CeFreshnessRow[]> {
   const results = await Promise.all(

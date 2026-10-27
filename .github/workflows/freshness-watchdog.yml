@@ -1,0 +1,73 @@
+# Freshness watchdog -- M001 T05 (pipeline-freshness incident, verified 2026-10-27).
+#
+# Once a day, reads MAX(<date col>) for every pipeline table in BigQuery
+# (SELECT-only) and posts to Slack when any table is older than its SLA, or
+# when an EXPIRIES calendar deadline is within 30 days. See ops/README.md.
+#
+# Schedule: 10:30 UTC = 16:00 IST -- after the anomaly run (~04:38 UTC) and the
+# generation digest (09:33 UTC at its latest observed), well before IST
+# midnight (18:30 UTC), so a late-starting GitHub cron cannot change "today".
+# Scheduled runs only fire from the default branch (main).
+#
+# Secrets (repo -> Settings -> Secrets and variables -> Actions):
+#   WATCHDOG_BQ_SA_JSON  service-account key JSON (BigQuery read + jobUser)
+#   SLACK_BOT_TOKEN      bot token with chat:write
+#   SLACK_CHANNEL_ID     channel id (#ib-perf)
+# Optional repo variable: WATCHDOG_MENTION (default <!here>; "none" disables).
+#
+# Inputs and secrets reach the script through env: only -- never through
+# ${{ }} interpolation inside run: (script-injection hardening).
+name: freshness-watchdog
+
+on:
+  schedule:
+    - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the Slack message in the log instead of posting it'
+        type: boolean
+        default: false
+      heartbeat:
+        description: 'All-green post when nothing is late (auto = Mondays IST only)'
+        type: choice
+        options: [auto, always, never]
+        default: auto
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freshness-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: python -m pip install --disable-pip-version-check 'google-cloud-bigquery>=3,<4'
+
+      - name: Unit tests (offline, no credentials)
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python ops/tests_freshness_watchdog.py
+
+      - name: Run watchdog
+        env:
+          WATCHDOG_BQ_SA_JSON: ${{ secrets.WATCHDOG_BQ_SA_JSON }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          WATCHDOG_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+          HEARTBEAT: ${{ inputs.heartbeat || 'auto' }}
+          WATCHDOG_MENTION: ${{ vars.WATCHDOG_MENTION || '<!here>' }}
+        run: python ops/freshness_watchdog.py --heartbeat "$HEARTBEAT"

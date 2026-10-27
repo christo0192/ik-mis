@@ -184,19 +184,25 @@ def _load_snapshot_file(path: Path) -> dict:
 
 
 def _load_from_bq() -> dict:
-    """Live SELECT of the latest snapshot_date row per campaign_name.
-    Raises on any failure -- the caller (load_registry) decides whether to
-    fall back to the local snapshot file."""
+    """Live SELECT of the LATEST snapshot only (rows WHERE snapshot_date =
+    MAX(snapshot_date)). Raises on any failure -- the caller (load_registry)
+    decides whether to fall back to the local snapshot file.
+
+    Changed 2026-10-27 from "latest row per campaign_name across ALL
+    snapshots": with weekly refreshes, that kept a renamed campaign's OLD
+    name alive forever as a ghost entry frozen at its July status (3 Google
+    renames exist today), and it disagreed with the dashboard, which reads
+    MAX(snapshot_date) only (ce-queries.ts). Latest-only is safe because
+    build_campaign_registry.py --refresh only ever writes COMPLETE snapshots
+    (every prior key carried forward, a shrink guard refusing anything
+    smaller). Duplicate campaign_names inside one snapshot (3 LinkedIn names
+    have 2 ids each) still collapse last-wins in _rows_to_registry, as
+    before."""
     table_id = bq_writer.validate_target("campaign_registry")
     client = bq_writer.get_client()          # lazy bigquery import inside bq_writer
     query = f"""
-        SELECT * EXCEPT(rn) FROM (
-          SELECT *, ROW_NUMBER() OVER (
-            PARTITION BY campaign_name ORDER BY snapshot_date DESC
-          ) AS rn
-          FROM `{table_id}`
-        )
-        WHERE rn = 1
+        SELECT * FROM `{table_id}`
+        WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM `{table_id}`)
     """
     result = client.query(query).result(timeout=120)
     rows = [dict(r.items()) for r in result]
@@ -226,8 +232,8 @@ def load_registry(path: str | Path | None = None, force_reload: bool = False) ->
       or the bq_writer preview wrapper {"rows": [...]}), unconditionally
       replacing the cache -- used by tests and any explicit-fixture caller.
     - `path` omitted: return the cached registry unless `force_reload`.
-      When (re)loading: if config.DRY_RUN is False, try a live BQ read first
-      (`_load_from_bq`); any failure (missing credentials, package, network,
+      When (re)loading: if config.DRY_RUN is False, try a live BQ read of
+      the latest snapshot first (`_load_from_bq`); any failure (missing credentials, package, network,
       table not yet created) logs a warning and falls back to the local
       DRY_RUN-preview snapshot. If config.DRY_RUN is True (the default),
       skip the live read entirely and go straight to the local snapshot --

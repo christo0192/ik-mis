@@ -1,0 +1,76 @@
+# PR + push gate for ik-mis. Needs NO secrets: every generation test runs on
+# fixtures in DRY_RUN, the watchdog tests are pure, and the dashboard build
+# never touches BigQuery (lazy client, force-dynamic pages). Live paths (BQ,
+# Slack, Google/LinkedIn APIs, claude -p, Fly, Cloudflare) are deliberately
+# NOT exercised here. Added 2026-10-27 with the pipeline-freshness fixes.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DRY_RUN: "true"
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: "1"
+      # Point every live-credential lookup at paths that don't exist so a test
+      # can never reach a real service even if a guard regresses.
+      IK_MCP_DIR: /nonexistent
+      SLACK_POST_SCRIPT: /nonexistent/slack_post.py
+      GENERATION_BQ_SERVICE_ACCOUNT: /nonexistent/sa.json
+      GENERATION_BQ_READ_SERVICE_ACCOUNT: /nonexistent/sa.json
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: shell syntax
+        run: bash -n run_daily.sh fly-deploy/entrypoint.sh
+      - name: shellcheck (errors only)
+        run: shellcheck -S error run_daily.sh fly-deploy/entrypoint.sh
+      - name: generation test suites
+        run: |
+          set -e
+          for f in generation/tests_*.py generation/smoke_test.py; do
+            echo "::group::$f"
+            python "$f"
+            echo "::endgroup::"
+          done
+      - name: watchdog unit tests
+        run: python ops/tests_freshness_watchdog.py
+
+  dashboard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: dashboard
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # >=22.18 needed for native TS type stripping in `node --test`.
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm run build
