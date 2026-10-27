@@ -75,3 +75,23 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm test
       - run: npm run build
+
+  trigger:
+    # cloudflare-trigger/ Worker (ik-ad-generator-trigger, which also starts the
+    # Intelligence machines on the 1st/2nd). fetch is stubbed in every test;
+    # nothing here reaches Fly or Cloudflare. Added 2026-10-27.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: cloudflare-trigger
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: cloudflare-trigger/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

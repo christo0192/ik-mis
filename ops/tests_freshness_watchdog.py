@@ -606,6 +606,13 @@ for raw, label in [(None, "unset"), ("not json {", "not JSON"), ('{"type": "user
         check(False, f"build_client rejects {label}")
     except fw.WatchdogConfigError as exc:
         check("not json {" not in str(exc), f"build_client: {label} -> WatchdogConfigError ({exc})")
+# A leading UTF-8 BOM (Windows PowerShell 5.1 pipe into `gh secret set`,
+# 2026-10-27) must not make a valid key or token look broken.
+reset_env(WATCHDOG_BQ_SA_JSON='﻿{"type": "service_account"}\r\n', SLACK_BOT_TOKEN="﻿xoxb-1-abc \n")
+check(fw._secret_env("WATCHDOG_BQ_SA_JSON") == '{"type": "service_account"}',
+      "_secret_env: strips a leading BOM + whitespace from the SA JSON")
+check(fw._secret_env("SLACK_BOT_TOKEN") == "xoxb-1-abc", "_secret_env: strips a leading BOM from the Slack token")
+check(fw._secret_env("SLACK_CHANNEL_ID") == "", "_secret_env: unset -> empty string")
 reset_env(BQ_PROJECT="bad project!")
 try:
     fw.bq_project()

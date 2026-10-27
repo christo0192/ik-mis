@@ -488,11 +488,19 @@ def bq_project() -> str:
     return project
 
 
+def _secret_env(name: str) -> str:
+    """Env secret with surrounding whitespace AND a leading UTF-8 BOM removed.
+    Windows PowerShell 5.1 can prepend a BOM when a value is piped into
+    `gh secret set` (2026-10-27: WATCHDOG_BQ_SA_JSON arrived as 'not valid
+    JSON'); str.strip() alone leaves U+FEFF in place."""
+    return os.environ.get(name, "").strip().lstrip("﻿").strip()
+
+
 def build_client():
     """BigQuery client from WATCHDOG_BQ_SA_JSON (parsed in memory, never
     written to disk). Raises WatchdogConfigError / ImportError; never
     includes the key material in an error message."""
-    raw = os.environ.get("WATCHDOG_BQ_SA_JSON", "").strip()
+    raw = _secret_env("WATCHDOG_BQ_SA_JSON")
     if not raw:
         raise WatchdogConfigError("WATCHDOG_BQ_SA_JSON is not set")
     try:
@@ -568,7 +576,7 @@ def _redact(text: str) -> str:
     """Belt and braces: no code path here formats a secret into a message,
     but a third-party exception string could echo one back."""
     for name in _SECRET_ENVS:
-        value = os.environ.get(name, "").strip()
+        value = _secret_env(name)
         if len(value) >= 8 and value in text:
             text = text.replace(value, "[REDACTED]")
     return text
@@ -752,8 +760,8 @@ def main(argv=None) -> int:
         today = today_ist()
     dry_run = args.dry_run or _env_true("WATCHDOG_DRY_RUN")
 
-    token = os.environ.get("SLACK_BOT_TOKEN", "").strip()
-    channel = os.environ.get("SLACK_CHANNEL_ID", "").strip()
+    token = _secret_env("SLACK_BOT_TOKEN")
+    channel = _secret_env("SLACK_CHANNEL_ID")
     if not dry_run and (not token or not channel):
         missing = [n for n, v in (("SLACK_BOT_TOKEN", token), ("SLACK_CHANNEL_ID", channel))
                    if not v]

@@ -1,0 +1,3 @@
+# Track the lockfile (added 2026-10-27): CI runs `npm ci`, which needs it. This
+# overrides the repo-root `cloudflare-trigger/package-lock.json` ignore rule.
+!package-lock.json
