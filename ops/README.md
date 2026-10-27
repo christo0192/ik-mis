@@ -220,3 +220,10 @@ gh workflow run freshness-watchdog.yml -R christo0192/ik-mis -f dry_run=false -f
   tables, and the registry.
 - **Cron delay.** A GitHub cron can start late, but that cannot cause a false
   alarm. "Today" is the IST date, and IST equals the UTC date until 18:30 UTC.
+- **Public-repo keepalive.** ik-mis is public as of 2026-10-27. GitHub
+  disables scheduled workflows in public repos after 60 days with no
+  repository activity. The workflow's `keepalive` job re-enables itself
+  through the REST API on every run, which resets that timer. If the repo
+  goes private again, the job is harmless and can stay. Private repos need
+  working Actions billing, though: an Actions billing lock stops this
+  watchdog completely.
